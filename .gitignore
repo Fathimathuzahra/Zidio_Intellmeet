@@ -1,0 +1,30 @@
+# Dépendances
+node_modules/
+backend/node_modules/
+backend/.env
+backend/.package-lock.json
+
+
+frontend/node_modules/
+frontend/.env
+frontend/.env.local
+frontend/dist
+frontend/dist-ssr
+frontend/.vite
+frontend/.package-lock.json
+
+
+# Build
+dist/
+build/
+
+# Divers
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

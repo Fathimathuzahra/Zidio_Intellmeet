@@ -1,0 +1,346 @@
+import { useState } from "react";
+import { DragDropContext, Droppable, Draggable, type DropResult } from "@hello-pangea/dnd";
+import { User, Calendar, AlertCircle, FolderKanban, Plus, Loader2Icon } from "lucide-react";
+import { useTeamTasks, useProjectTasks } from "@/hooks/use-tasks";
+import { useUpdateTaskStatus } from "@/hooks/use-project";
+import { CreateTaskModal } from "./CreateTaskModal";
+import type { ProjectTasksResponse, Task } from "@/types/task";
+
+interface TeamTasksBoardProps {
+  teamId: string;
+  projectId?: string;
+  viewMode: "team" | "project";
+}
+
+type TaskItem = Task & {
+  taskId: string;
+  projectId: string;
+  projectName: string;
+};
+
+const statusColumns = [
+  { id: 'todo', title: 'To Do', color: 'bg-gray-500' },
+  { id: 'in-progress', title: 'In Progress', color: 'bg-amber-500' },
+  { id: 'review', title: 'Review', color: 'bg-blue-500' },
+  { id: 'done', title: 'Done', color: 'bg-emerald-500' },
+];
+
+const priorityColors: Record<string, string> = {
+  Critical: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400',
+  High: 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400',
+  Medium: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
+  Low: 'bg-gray-100 text-gray-700 dark:bg-gray-900/30 dark:text-gray-400',
+};
+
+export function TeamTasksBoard({ teamId, projectId, viewMode }: TeamTasksBoardProps) {
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [selectedProject, setSelectedProject] = useState<string>("all");
+  const [selectedProjectForTask, setSelectedProjectForTask] = useState<string>("");
+  
+  const teamTasksQuery = useTeamTasks(teamId);
+  const projectTasksQuery = useProjectTasks(projectId || '');
+  
+  const isLoading = viewMode === "team" ? teamTasksQuery.isLoading : projectTasksQuery.isLoading;
+  const data = viewMode === "team" ? teamTasksQuery.data : projectTasksQuery.data;
+  
+  const updateTaskStatus = useUpdateTaskStatus();
+
+  const refetch = () => {
+    if (viewMode === "team") {
+      teamTasksQuery.refetch();
+    } else {
+      projectTasksQuery.refetch();
+    }
+  };
+
+  const onDragEnd = async (result: DropResult) => {
+    const { destination, source, draggableId } = result;
+    
+    if (!destination) return;
+    if (destination.droppableId === source.droppableId && destination.index === source.index) return;
+    
+    const taskId = draggableId;
+    const newStatus = destination.droppableId as 'todo' | 'in-progress' | 'review' | 'done';
+    
+    if (viewMode === "project" && projectId) {
+      await updateTaskStatus.mutateAsync({
+        projectId: projectId,
+        taskId: taskId,
+        status: newStatus
+      });
+      refetch();
+    } 
+    else if (viewMode === "team" && data?.tasks) {
+      const task = data.tasks.find(t => t.taskId === taskId);
+      if (task && task.projectId) {
+        await updateTaskStatus.mutateAsync({
+          projectId: task.projectId,
+          taskId: taskId,
+          status: newStatus
+        });
+        refetch();
+      }
+    }
+  };
+
+  const handleCreateTask = () => {
+    if (viewMode === "project" && projectId) {
+      setSelectedProjectForTask(projectId);
+      setIsCreateModalOpen(true);
+    } else if (viewMode === "team" && selectedProject !== "all") {
+      setSelectedProjectForTask(selectedProject);
+      setIsCreateModalOpen(true);
+    } else {
+      console.log("Please select a project first");
+    }
+  };
+
+  const handleModalClose = () => {
+    console.log("Closing modal and refetching tasks");
+    setIsCreateModalOpen(false);
+    setSelectedProjectForTask("");
+    refetch();
+  };
+
+  if (isLoading) {
+    return (
+      <Loader2Icon className="animate-spin text-muted-foreground mx-auto my-16" size={48} />
+    );
+  }
+
+  if (!data || !data.tasks || data.totalTasks === 0) {
+    return (
+      <>
+        <div className="flex flex-col items-center justify-center py-16 gap-4">
+          <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center">
+            <AlertCircle size={32} className="text-primary" />
+          </div>
+          <div className="text-center">
+            <h3 className="font-semibold text-foreground mb-1">No tasks yet</h3>
+            <p className="text-sm text-muted-foreground">
+              {viewMode === "team" 
+                ? "Create tasks in your projects to see them here" 
+                : "Create your first task in this project"}
+            </p>
+            {viewMode === "project" && (
+              <button
+                onClick={handleCreateTask}
+                className="mt-4 flex items-center gap-2 bg-primary text-primary-foreground px-4 py-2 rounded-lg text-sm font-semibold hover:opacity-90 transition-all"
+              >
+                <Plus size={16} />
+                Create First Task
+              </button>
+            )}
+          </div>
+        </div>
+        
+        {isCreateModalOpen && selectedProjectForTask && (
+          <CreateTaskModal
+            isOpen={isCreateModalOpen}
+            onClose={handleModalClose}
+            projectId={selectedProjectForTask}
+            teamId={teamId}
+          />
+        )}
+      </>
+    );
+  }
+
+  const tasksArray = data.tasks as TaskItem[];
+  
+  const filteredTasks = viewMode === "team" && selectedProject !== "all"
+    ? tasksArray.filter(t => t.projectId === selectedProject)
+    : tasksArray;
+  
+  const tasksByStatus = statusColumns.reduce((acc, col) => {
+    acc[col.id] = filteredTasks.filter(task => task?.status === col.id);
+    return acc;
+  }, {} as Record<string, TaskItem[]>);
+
+  const projects = viewMode === "team" && tasksArray.length > 0
+    ? Array.from(
+        new Map(
+          tasksArray
+            .filter(t => t.projectId && t.projectName)
+            .map(t => [t.projectId, t.projectName])
+        ).entries()
+      ).map(([id, name]) => ({ id, name }))
+    : [];
+
+  const getProjectName = () => {
+    if (viewMode === "project" && 'projectName' in data) {
+      return (data as ProjectTasksResponse).projectName;
+    }
+    return "Project";
+  };
+
+  return (
+    <>
+      <div className="space-y-4">
+        <div className="flex justify-between items-center flex-wrap gap-3">
+          <div>
+            <h2 className="text-lg font-semibold text-foreground">
+              {viewMode === "team" ? "All Team Tasks" : `Tasks - ${getProjectName()}`}
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              {tasksArray.length} total tasks
+              {viewMode === "team" && projects.length > 0 && ` across ${projects.length} projects`}
+            </p>
+          </div>
+          
+          <div className="flex items-center gap-3">
+            {viewMode === "project" && (
+              <button
+                onClick={handleCreateTask}
+                className="flex items-center gap-2 bg-primary text-primary-foreground px-4 py-2 rounded-lg text-sm font-semibold hover:opacity-90 transition-all"
+              >
+                <Plus size={16} />
+                New Task
+              </button>
+            )}
+            
+            {viewMode === "team" && (
+              <>
+                <button
+                  onClick={handleCreateTask}
+                  disabled={selectedProject === "all"}
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                    selectedProject === "all"
+                      ? "bg-muted text-muted-foreground cursor-not-allowed"
+                      : "bg-primary text-primary-foreground hover:opacity-90"
+                  }`}
+                  title={selectedProject === "all" ? "Select a project first" : "Create new task"}
+                >
+                  <Plus size={14} />
+                  New Task
+                </button>
+                <select
+                  value={selectedProject}
+                  onChange={(e) => setSelectedProject(e.target.value)}
+                  className="px-3 py-1.5 rounded-lg border border-input bg-background text-sm"
+                >
+                  <option value="all">All Projects</option>
+                  {projects.map(project => (
+                    <option key={project.id} value={project.id}>{project.name}</option>
+                  ))}
+                </select>
+              </>
+            )}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-4 gap-3">
+          {statusColumns.map(col => (
+            <div key={col.id} className="bg-card border border-border rounded-lg p-3">
+              <div className="flex items-center justify-between">
+                <span className={`w-2 h-2 rounded-full ${col.color}`} />
+                <span className="text-2xl font-bold text-foreground">
+                  {tasksByStatus[col.id]?.length || 0}
+                </span>
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">{col.title}</p>
+            </div>
+          ))}
+        </div>
+
+        <DragDropContext onDragEnd={onDragEnd}>
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            {statusColumns.map(column => (
+              <div key={column.id} className="flex flex-col gap-3">
+                <div className="flex items-center gap-2 px-1">
+                  <span className={`w-2 h-2 rounded-full ${column.color}`} />
+                  <h3 className="font-semibold text-foreground text-sm">{column.title}</h3>
+                  <span className="ml-auto text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-full">
+                    {tasksByStatus[column.id]?.length || 0}
+                  </span>
+                </div>
+
+                <Droppable droppableId={column.id}>
+                  {(provided, snapshot) => (
+                    <div
+                      ref={provided.innerRef}
+                      {...provided.droppableProps}
+                      className={`min-h-[400px] p-2 rounded-xl transition-all ${
+                        snapshot.isDraggingOver ? 'bg-primary/5' : 'bg-muted/20'
+                      }`}
+                    >
+                      {tasksByStatus[column.id]?.map((task, index) => (
+                        <Draggable key={task.taskId} draggableId={task.taskId} index={index}>
+                          {(provided, snapshot) => (
+                            <div
+                              ref={provided.innerRef}
+                              {...provided.draggableProps}
+                              {...provided.dragHandleProps}
+                              className={`bg-card rounded-lg p-3 mb-2 shadow-sm border ${
+                                snapshot.isDragging ? 'border-primary shadow-lg' : 'border-border'
+                              }`}
+                            >
+                              <div className="flex items-start justify-between mb-2">
+                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${priorityColors[task.priority] || priorityColors.Medium}`}>
+                                  {task.priority || 'Medium'}
+                                </span>
+                                {viewMode === "team" && (
+                                  <span className="text-[10px] text-muted-foreground flex items-center gap-1">
+                                    <FolderKanban size={10} />
+                                    {task.projectName || 'Unknown Project'}
+                                  </span>
+                                )}
+                              </div>
+                              
+                              <h4 className="text-sm font-semibold text-foreground mb-2">
+                                {task.title}
+                              </h4>
+                              
+                              {task.description && (
+                                <p className="text-xs text-muted-foreground mb-3 line-clamp-2">
+                                  {task.description}
+                                </p>
+                              )}
+                              
+                              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                                <div className="flex items-center gap-2">
+                                  {task.assignedTo && (
+                                    <div className="flex items-center gap-1">
+                                      <User size={10} />
+                                      <span>{typeof task.assignedTo === 'object' ? task.assignedTo.name : 'Unassigned'}</span>
+                                    </div>
+                                  )}
+                                </div>
+                                {task.dueDate && (
+                                  <div className="flex items-center gap-1 text-destructive">
+                                    <Calendar size={10} />
+                                    <span>{new Date(task.dueDate).toLocaleDateString()}</span>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </Draggable>
+                      ))}
+                      {provided.placeholder}
+                      {(!tasksByStatus[column.id] || tasksByStatus[column.id].length === 0) && (
+                        <div className="text-center text-xs text-muted-foreground py-8">
+                          No tasks
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </Droppable>
+              </div>
+            ))}
+          </div>
+        </DragDropContext>
+      </div>
+
+      {/* Create Task Modal */}
+      {isCreateModalOpen && selectedProjectForTask && (
+        <CreateTaskModal
+          isOpen={isCreateModalOpen}
+          onClose={handleModalClose}
+          projectId={selectedProjectForTask}
+          teamId={teamId}
+        />
+      )}
+    </>
+  );
+}
