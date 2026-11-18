@@ -11,6 +11,11 @@ const {
 const { signAccessToken, signRefreshToken } = require("../utils/tokens");
 
 const router = express.Router();
+const isGoogleOAuthConfigured = () => Boolean(
+  process.env.GOOGLE_CLIENT_ID &&
+  process.env.GOOGLE_CLIENT_SECRET &&
+  process.env.GOOGLE_CALLBACK_URL
+);
 
 router.post("/register", register);
 router.post("/login", login);
@@ -19,18 +24,31 @@ router.post("/logout", logout);
 router.post("/forgot-password", forgotPassword);
 router.post("/reset-password", resetPassword);
 
-router.get(
-  "/google",
-  passport.authenticate("google", { session: false, scope: ["profile", "email"] })
-);
+router.get("/google", (req, res, next) => {
+  if (!isGoogleOAuthConfigured()) {
+    return res.status(503).json({
+      message: "Google login is not configured on this server. Add GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_CALLBACK_URL to enable it.",
+    });
+  }
 
-router.get(
-  "/google/callback",
-  passport.authenticate("google", {
+  return passport.authenticate("google", {
     session: false,
-    failureRedirect: `${process.env.FRONTEND_URL}/login?error=google_auth_failed`,
-  }),
-  (req, res) => {
+    scope: ["profile", "email"],
+  })(req, res, next);
+});
+
+router.get("/google/callback", (req, res, next) => {
+  if (!isGoogleOAuthConfigured()) {
+    return res.status(503).json({
+      message: "Google login is not configured on this server. Add GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_CALLBACK_URL to enable it.",
+    });
+  }
+
+  return passport.authenticate("google", {
+    session: false,
+    failureRedirect: `${process.env.FRONTEND_URL || "http://localhost:5173"}/login?error=google_auth_failed`,
+  })(req, res, next);
+}, (req, res) => {
     const user = req.user;
     const accessToken = signAccessToken({
       id: user._id.toString(),
@@ -45,7 +63,7 @@ router.get(
     res.cookie("refreshToken", refreshToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
+      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
       maxAge: days * 24 * 60 * 60 * 1000,
     });
     const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";

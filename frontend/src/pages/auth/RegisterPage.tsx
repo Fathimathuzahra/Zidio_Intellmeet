@@ -1,10 +1,11 @@
 import { useState } from 'react'
+import { motion } from 'framer-motion'
 import { useNavigate, Link } from 'react-router-dom'
 import { useAuthStore } from '../../store/useAuthStore'
 import { useMutation } from '@tanstack/react-query'
 import { authService } from '../../services/auth.service'
 import { useToast } from '../../components/Toast'
-import { Mail, Lock, User, Eye, EyeOff, ArrowRight, Shield, Users } from 'lucide-react'
+import { Mail, Lock, User, Eye, EyeOff, ArrowRight, Shield } from 'lucide-react'
 
 type ApiError = {
   response?: {
@@ -24,7 +25,6 @@ export default function RegisterPage() {
     email: '',
     password: '',
     confirmPassword: '',
-    role: 'member' as 'member' | 'admin',
   })
   const [pwdMismatch, setPwdMismatch] = useState(false)
 
@@ -57,18 +57,21 @@ export default function RegisterPage() {
       name: formData.fullName,
       email: formData.email,
       password: formData.password,
-      role: formData.role,
     })
   }
 
-  const roles = [
-    { value: 'admin', label: 'Team Manager', desc: 'Create teams, manage projects', icon: Shield },
-    { value: 'member', label: 'Team Member', desc: 'Join meetings, collaborate', icon: Users },
-  ]
-
   return (
-    <div className="space-y-6 animate-slide-up">
-      <div className="space-y-1.5">
+    <motion.div
+      initial={{ opacity: 0, y: 22 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.45, ease: 'easeOut' }}
+      className="rounded-[28px] border border-border/70 bg-card/80 p-5 shadow-[0_25px_80px_-45px_rgba(15,23,42,0.9)] backdrop-blur-xl sm:p-7"
+    >
+      <div className="space-y-2">
+        <div className="inline-flex items-center gap-2 rounded-full border border-primary/20 bg-primary/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-primary">
+          <Shield size={12} />
+          Join the workspace
+        </div>
         <h2 className="text-3xl font-bold text-foreground tracking-tight">Create account</h2>
         <p className="text-muted-foreground text-sm">
           Already have an account?{' '}
@@ -78,7 +81,13 @@ export default function RegisterPage() {
         </p>
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-4">
+      <motion.form
+        initial={{ opacity: 0, scale: 0.98 }}
+        animate={{ opacity: 1, scale: 1 }}
+        transition={{ delay: 0.08, duration: 0.35 }}
+        onSubmit={handleSubmit}
+        className="mt-6 space-y-4"
+      >
         {/* Full Name */}
         <div className="space-y-1.5">
           <label className="text-sm font-semibold text-foreground">Full name</label>
@@ -110,48 +119,6 @@ export default function RegisterPage() {
               required
               className="input-base pl-10"
             />
-          </div>
-        </div>
-
-        {/* Role Selection */}
-        <div className="space-y-3">
-          <label className="text-base font-semibold text-foreground">Choose Your Role</label>
-          <div className="grid grid-cols-2 gap-4">
-            {roles.map(({ value, label, desc, icon: Icon }) => (
-              <label
-                key={value}
-                className={`relative flex flex-col gap-2 p-5 border-2 rounded-2xl cursor-pointer transition-all duration-200 ${
-                  formData.role === value
-                    ? 'border-primary bg-gradient-to-br from-primary/10 to-transparent ring-2 ring-primary/20'
-                    : 'border-border hover:border-primary/40 hover:bg-muted/30'
-                }`}
-              >
-                <input
-                  type="radio"
-                  name="role"
-                  value={value}
-                  checked={formData.role === value}
-                  onChange={handleChange}
-                  className="sr-only"
-                />
-                <div className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all ${
-                  formData.role === value ? 'bg-primary/20 text-primary scale-110' : 'bg-muted/60 text-muted-foreground'
-                }`}>
-                  <Icon size={18} />
-                </div>
-                <div>
-                  <span className="text-sm font-bold text-foreground block">{label}</span>
-                  <span className="text-[12px] text-muted-foreground leading-snug">{desc}</span>
-                </div>
-                {formData.role === value && (
-                  <div className="absolute top-3 right-3 w-5 h-5 rounded-full bg-primary flex items-center justify-center shadow-lg shadow-primary/30">
-                    <svg width="10" height="8" viewBox="0 0 10 8" fill="none">
-                      <path d="M1 4l2.5 2.5L9 1.5" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                    </svg>
-                  </div>
-                )}
-              </label>
-            ))}
           </div>
         </div>
 
@@ -203,6 +170,10 @@ export default function RegisterPage() {
           )}
         </div>
 
+        <p className="text-xs text-muted-foreground">
+          New accounts start as team members. Ask a workspace administrator if you need management access.
+        </p>
+
         <button
           type="submit"
           disabled={registerMutation.isPending}
@@ -214,14 +185,14 @@ export default function RegisterPage() {
             <>Create Account <ArrowRight size={16} /></>
           )}
         </button>
-      </form>
+      </motion.form>
 
       <p className="text-xs text-muted-foreground text-center leading-relaxed">
         By registering, you agree to our{' '}
-        <a href="#" className="font-semibold text-foreground hover:text-primary underline underline-offset-2 transition-colors">Terms of Service</a>
+        <Link to="/terms" className="font-semibold text-foreground hover:text-primary underline underline-offset-2 transition-colors">Terms of Service</Link>
         {' '}and{' '}
-        <a href="#" className="font-semibold text-foreground hover:text-primary underline underline-offset-2 transition-colors">Privacy Policy</a>.
+        <Link to="/privacy" className="font-semibold text-foreground hover:text-primary underline underline-offset-2 transition-colors">Privacy Policy</Link>.
       </p>
-    </div>
+    </motion.div>
   )
 }

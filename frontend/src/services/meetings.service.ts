@@ -17,7 +17,7 @@ export interface Meeting {
     text: string;
     assignee: string;
     completed: boolean;
-    status?: "todo" | "in-progress" | "done";
+    status?: "todo" | "in_progress" | "done";
     priority?: "Critical" | "High" | "Medium" | "Low";
   }[];
   createdAt: string;
@@ -50,7 +50,6 @@ export const meetingsService = {
 
   create: async (payload: { title: string; scheduledAt?: string; teamId?: string }): Promise<Meeting> => {
     const { data } = await api.post("/meetings", payload);
-    console.log("Response from create meeting API:", data); 
     return data;
   },
 
@@ -72,9 +71,18 @@ export const meetingsService = {
     return data.meeting;
   },
 
+  analyze: async (id: string, transcript: string): Promise<{ summary: string; actionItems: { text: string; assignee: string }[]; source?: "openai" | "demo" }> => {
+    const { data } = await api.post(`/meetings/${id}/ai-analysis`, { transcript });
+    return data;
+  },
+
   toggleActionItem: async (id: string, itemId: string): Promise<Meeting> => {
     const { data } = await api.patch(`/meetings/${id}/action-items/${itemId}/toggle`);
     return data.meeting;
+  },
+
+  delete: async (id: string): Promise<void> => {
+    await api.delete(`/meetings/${id}`);
   },
 
   getAnalytics: async (): Promise<Analytics> => {

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { CheckCircle2, Circle, Search, Filter, Clock, Video, Target, Zap } from 'lucide-react'
+import { motion } from 'framer-motion'
+import { CheckCircle2, Circle, ClipboardList, Search, Filter, Clock, Video, Target, Zap } from 'lucide-react'
 import { meetingsService } from '../../services/meetings.service'
 import { useToast } from '../../components/Toast'
 
@@ -27,6 +28,16 @@ const TABS: { key: FilterTab; label: string }[] = [
   { key: 'all', label: 'All' },
   { key: 'pending', label: 'Pending' },
   { key: 'completed', label: 'Completed' },
+]
+
+const ACTION_HERO_VIDEO = '/teams/15442091_1920_1080_25fps.mp4'
+const ACTION_IMAGES = [
+  '/teams/pexels-pavel-danilyuk-8761812.jpg',
+  '/teams/pexels-wolfart-34676331.jpg',
+  '/teams/pexels-0ldpikes-33543226.jpg',
+  '/teams/pexels-gustavo-fring-3874108.jpg',
+  '/teams/pexels-usen-parmanov-442859060-15399856.jpg',
+  '/teams/pexels-0ldpikes-33543226.jpg',
 ]
 
 export default function TasksPage() {
@@ -88,7 +99,36 @@ export default function TasksPage() {
     : 0
 
   return (
-    <div className="max-w-4xl mx-auto space-y-7 animate-slide-up">
+    <div className="min-h-full overflow-y-auto p-4 xl:p-8">
+      <div className="space-y-8 animate-slide-up">
+          <motion.section
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.6 }}
+            className="relative overflow-hidden rounded-[2rem] border border-white/10 bg-slate-950/90 shadow-2xl shadow-black/40"
+          >
+            <div className="absolute inset-0 overflow-hidden">
+              <video src={ACTION_HERO_VIDEO} autoPlay muted loop playsInline className="h-full w-full object-cover opacity-35" />
+              <div className="absolute inset-0 bg-gradient-to-br from-slate-950/90 via-slate-950/55 to-transparent" />
+            </div>
+            <div className="relative mx-auto grid max-w-7xl gap-8 px-6 py-14 lg:grid-cols-[1fr_520px] lg:items-center lg:px-12 lg:py-20">
+              <div className="space-y-5">
+                <span className="inline-flex items-center gap-2 rounded-full bg-primary/15 px-4 py-2 text-xs font-semibold uppercase tracking-[0.24em] text-primary"><ClipboardList size={14} /> Work in motion</span>
+                <h1 className="max-w-3xl text-4xl font-extrabold tracking-tight text-white sm:text-6xl">Turn every meeting into meaningful progress.</h1>
+                <p className="max-w-2xl text-lg leading-8 text-slate-200">A full-width workspace for tracking AI-generated action items, keeping priorities clear, and helping your team close the loop.</p>
+              </div>
+              <div className="rounded-[2rem] border border-white/10 bg-slate-950/75 p-4 shadow-2xl shadow-black/30">
+                <video src={ACTION_HERO_VIDEO} autoPlay muted loop playsInline className="h-80 w-full rounded-[1.5rem] object-cover sm:h-96" />
+              </div>
+            </div>
+          </motion.section>
+
+          <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {ACTION_IMAGES.map((image, index) => (
+              <img key={image} src={image} alt={`Collaboration moment ${index + 1}`} className="h-52 w-full rounded-[1.75rem] border border-white/10 object-cover shadow-xl shadow-black/20" />
+            ))}
+          </section>
+
       {/* Hero Header */}
       <div className="relative group card-base p-10 overflow-hidden rounded-3xl">
         <div className="absolute inset-0 bg-gradient-to-br from-violet-50/30 to-transparent dark:from-violet-950/20 dark:to-transparent" />
@@ -282,6 +322,7 @@ export default function TasksPage() {
           })}
         </div>
       )}
+        </div>
     </div>
   )
 }

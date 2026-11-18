@@ -1,6 +1,7 @@
 const Meeting = require('../models/Meeting');
 const Team = require('../models/Team');
 const sendMeetingEmail = require('../utils/sendMeetingEmail');
+const { canAccessMeeting } = require('../utils/meetingAccess');
 
 function generateRoomId() {
   return Math.random().toString(36).substring(2, 10).toUpperCase();
@@ -22,7 +23,6 @@ async function notifyTeamMembers(meeting, team, host, isScheduled) {
       isScheduled,
     })
   ));
-  console.log(`✅ Emails sent to ${members.length} team members`);
 }
 
 const getMeetings = async (req, res) => {
@@ -55,12 +55,17 @@ const getMeetings = async (req, res) => {
 
 const getMeeting = async (req, res) => {
   try {
-    const meeting = await Meeting.findById(req.params.id)
-      .populate('host', 'name email')
-      .populate('participants.userId', 'name email');
+    const meeting = await Meeting.findById(req.params.id);
     if (!meeting) return res.status(404).json({ message: 'Meeting not found' });
+    if (!(await canAccessMeeting(meeting, req.user.id))) {
+      return res.status(403).json({ message: 'You cannot access this meeting' });
+    }
+
+    await meeting.populate('host', 'name email');
+    await meeting.populate('participants.userId', 'name email');
     res.json(meeting);
   } catch (error) {
+    console.error('Error fetching meeting:', error);
     res.status(500).json({ message: 'Server error' });
   }
 };
@@ -97,7 +102,10 @@ const createMeeting = async (req, res) => {
       .populate('team');
 
     if (team && team.members.length > 0) {
-      await notifyTeamMembers(populatedMeeting, team, populatedMeeting.host, meeting.status === 'scheduled');
+      // Invitation delivery must never make a successfully-created meeting fail.
+      // SMTP is optional for local demos and can be retried independently.
+      notifyTeamMembers(populatedMeeting, team, populatedMeeting.host, meeting.status === 'scheduled')
+        .catch((notificationError) => console.warn('Meeting invitation delivery failed:', notificationError.message));
     }
 
     res.status(201).json(populatedMeeting);
@@ -124,7 +132,8 @@ const startMeeting = async (req, res) => {
     await meeting.save();
 
     if (meeting.team && meeting.team.members) {
-      await notifyTeamMembers(meeting, meeting.team, meeting.host, false);
+      notifyTeamMembers(meeting, meeting.team, meeting.host, false)
+        .catch((notificationError) => console.warn('Meeting start notification failed:', notificationError.message));
     }
 
     res.json({ meeting });
@@ -140,6 +149,9 @@ const endMeeting = async (req, res) => {
     const meeting = await Meeting.findById(req.params.id);
 
     if (!meeting) return res.status(404).json({ message: 'Meeting not found' });
+    if (meeting.host.toString() !== req.user.id) {
+      return res.status(403).json({ message: 'Only the meeting host can end this meeting' });
+    }
 
     meeting.status = 'ended';
     meeting.endedAt = new Date();
@@ -158,18 +170,28 @@ const saveSummary = async (req, res) => {
     const { summary, actionItems } = req.body;
     const meeting = await Meeting.findById(req.params.id);
     if (!meeting) return res.status(404).json({ message: 'Meeting not found' });
+    if (!(await canAccessMeeting(meeting, req.user.id))) {
+      return res.status(403).json({ message: 'You cannot update this meeting' });
+    }
 
     meeting.summary = summary;
     if (Array.isArray(actionItems)) {
+      const statusMap = {
+        'todo': 'todo',
+        'in-progress': 'in_progress',
+        'done': 'done'
+      };
       meeting.actionItems = actionItems.map(item => ({
         text: item.text,
         assignee: item.assignee || '',
-        completed: false,
+        completed: item.completed || false, // Preserve completed status if present
+        status: statusMap[item.status?.toLowerCase()] || 'todo', // Map status
       }));
     }
     await meeting.save();
     res.json({ meeting });
   } catch (error) {
+    console.error('Error saving meeting summary:', error);
     res.status(500).json({ message: 'Server error' });
   }
 };
@@ -179,6 +201,9 @@ const toggleActionItem = async (req, res) => {
     const { id, itemId } = req.params;
     const meeting = await Meeting.findById(id);
     if (!meeting) return res.status(404).json({ message: 'Meeting not found' });
+    if (!(await canAccessMeeting(meeting, req.user.id))) {
+      return res.status(403).json({ message: 'You cannot update this meeting' });
+    }
 
     const item = meeting.actionItems.id(itemId);
     if (!item) return res.status(404).json({ message: 'Action item not found' });
@@ -188,6 +213,7 @@ const toggleActionItem = async (req, res) => {
     await meeting.save();
     res.json({ meeting });
   } catch (error) {
+    console.error('Error updating meeting action item:', error);
     res.status(500).json({ message: 'Server error' });
   }
 };
@@ -251,6 +277,20 @@ const getAnalytics = async (req, res) => {
   }
 };
 
+const deleteMeeting = async (req, res) => {
+  try {
+    const meeting = await Meeting.findById(req.params.id);
+    if (!meeting) return res.status(404).json({ message: 'Meeting not found' });
+    if (meeting.host.toString() !== req.user.id) {
+      return res.status(403).json({ message: 'Only the host can delete this meeting' });
+    }
+    await meeting.deleteOne();
+    res.json({ message: 'Meeting deleted' });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
 module.exports = {
   getMeetings,
   getMeeting,
@@ -260,4 +300,5 @@ module.exports = {
   saveSummary,
   toggleActionItem,
   getAnalytics,
+  deleteMeeting,
 };

@@ -99,7 +99,6 @@ export function ProjectsList({ teamId,  onViewTasks }: ProjectsListProps) {
                     <div className="absolute right-0 mt-2 w-32 bg-card border border-border rounded-lg shadow-lg z-10">
                       <button
                         onClick={() => {
-                          console.log("Edit project", project._id);
                           setSelectedProject(null);
                         }}
                         className="w-full text-left px-3 py-2 text-sm hover:bg-muted transition-colors flex items-center gap-2"

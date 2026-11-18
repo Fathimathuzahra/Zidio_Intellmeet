@@ -18,6 +18,7 @@ export default function ForgotPasswordPage() {
   const [cooldown, setCooldown] = useState(0)
   const [touched, setTouched] = useState(false)
   const [error, setError] = useState('')
+  const [debugResetUrl, setDebugResetUrl] = useState('')
 
   const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
 
@@ -31,7 +32,8 @@ export default function ForgotPasswordPage() {
     setLoading(true)
     setError('')
     try {
-      await api.post('/auth/forgot-password', { email })
+      const response = await api.post('/auth/forgot-password', { email })
+      setDebugResetUrl(response.data?.debugResetUrl || '')
       setSubmitted(true)
       setCooldown(60)
     } catch (err) {
@@ -138,6 +140,16 @@ export default function ForgotPasswordPage() {
                 <p className="text-xs text-muted-foreground">The link will expire in 15 minutes.</p>
               </div>
             </div>
+
+            {debugResetUrl && (
+              <div className="rounded-2xl border border-amber-400/30 bg-amber-500/8 p-4 text-sm">
+                <p className="font-semibold text-amber-700 dark:text-amber-300">Local email delivery is not configured.</p>
+                <p className="mt-1 text-muted-foreground">Use the reset link below for this environment.</p>
+                <a href={debugResetUrl} className="mt-3 inline-flex items-center gap-2 rounded-full bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground hover:opacity-90">
+                  Open reset link
+                </a>
+              </div>
+            )}
 
             <div className="rounded-2xl border border-border bg-muted/30 p-4">
               <p className="text-sm font-semibold text-foreground">Didn't receive the email?</p>

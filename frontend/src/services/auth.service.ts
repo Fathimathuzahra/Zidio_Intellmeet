@@ -1,4 +1,5 @@
 import api from "../lib/api";
+import { API_URL } from "../lib/config";
 import type { AuthResponse, LoginCredentials, RegisterCredentials } from "../types/auth";
 import type { User } from "../types/user";
 
@@ -18,7 +19,6 @@ export const authService = {
       name: credentials.name,
       email: credentials.email,
       password: credentials.password,
-      role: credentials.role,
     });
     return data;
   },
@@ -28,7 +28,6 @@ export const authService = {
   },
 
   loginWithGoogle: () => {
-    const base = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
-    window.location.href = `${base}/auth/google`;
+    window.location.href = `${API_URL}/auth/google`;
   },
 };

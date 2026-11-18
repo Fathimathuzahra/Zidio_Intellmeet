@@ -1,4 +1,4 @@
-import { Video, Clock, ChevronRight, Sparkles, Radio } from 'lucide-react'
+import { Video, Clock, ChevronRight, Search, Sparkles, Radio } from 'lucide-react'
 import type { Meeting } from '../../services/meetings.service'
 import { useNavigate } from 'react-router-dom'
 
@@ -6,6 +6,8 @@ interface RecentMeetingsProps {
   meetings: Meeting[]
   isLoading?: boolean
   onViewAll?: () => void
+  searchTerm?: string
+  onSearchChange?: (value: string) => void
 }
 
 function timeAgo(dateStr: string) {
@@ -25,21 +27,35 @@ function getMeetingDuration(m: Meeting) {
   return mins > 0 ? `${mins}m` : null
 }
 
-export function RecentMeetings({ meetings, isLoading, onViewAll }: RecentMeetingsProps) {
+export function RecentMeetings({ meetings, isLoading, onViewAll, searchTerm = '', onSearchChange }: RecentMeetingsProps) {
   const navigate = useNavigate()
   return (
     <div className="card-base overflow-hidden">
-      <div className="px-5 py-4 border-b border-border flex items-center justify-between">
+      <div className="px-5 py-4 border-b border-border flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <Video size={15} className="text-primary" />
           <h2 className="font-bold text-foreground text-sm">Recent Meetings</h2>
         </div>
-        <button
-          onClick={onViewAll}
-          className="flex items-center gap-1 text-xs font-semibold text-primary hover:underline underline-offset-4 transition-colors"
-        >
-          View all <ChevronRight size={13} />
-        </button>
+        <div className="flex items-center gap-3">
+          {onSearchChange && (
+            <label className="flex h-8 items-center gap-2 rounded-lg border border-border bg-background px-2.5 text-muted-foreground focus-within:border-primary">
+              <Search size={13} aria-hidden="true" />
+              <input
+                aria-label="Search meetings"
+                value={searchTerm}
+                onChange={(event) => onSearchChange(event.target.value)}
+                placeholder="Search"
+                className="w-24 bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground"
+              />
+            </label>
+          )}
+          <button
+            onClick={onViewAll}
+            className="flex items-center gap-1 text-xs font-semibold text-primary hover:underline underline-offset-4 transition-colors"
+          >
+            View all <ChevronRight size={13} />
+          </button>
+        </div>
       </div>
 
       {isLoading ? (

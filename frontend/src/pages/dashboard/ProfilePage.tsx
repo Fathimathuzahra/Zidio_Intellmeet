@@ -98,7 +98,8 @@ export default function ProfilePage() {
   ] as const
 
   return (
-    <div className="max-w-3xl mx-auto space-y-6 animate-slide-up pb-10">
+    <div className="min-h-full p-4 xl:p-8">
+      <div className="mx-auto max-w-3xl space-y-6 animate-slide-up pb-10">
       {/* Hero banner */}
       <div className="card-base overflow-hidden">
         <div className="h-24 gradient-primary relative">
@@ -445,6 +446,7 @@ export default function ProfilePage() {
           </div>
         </div>
       )}
+      </div>
     </div>
   )
 }

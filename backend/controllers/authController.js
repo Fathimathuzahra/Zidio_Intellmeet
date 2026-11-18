@@ -6,7 +6,7 @@ const { signAccessToken, signRefreshToken, verifyRefreshToken } = require("../ut
 const cookieOpts = () => ({
   httpOnly: true,
   secure: process.env.NODE_ENV === "production",
-  sameSite: "lax",
+  sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
   maxAge: Number.parseInt(process.env.REFRESH_COOKIE_DAYS || "7", 10) * 24 * 60 * 60 * 1000,
 });
 
@@ -21,7 +21,7 @@ const buildUserPayload = (user) => ({
 
 const register = async (req, res, next) => {
   try {
-    const { email, password, name, role } = req.body || {};
+    const { email, password, name } = req.body || {};
 
     if (!email || !password) {
       return res.status(400).json({ message: "Email and password are required" });
@@ -39,7 +39,7 @@ const register = async (req, res, next) => {
       email: email.toLowerCase().trim(),
       password,
       name: name || "",
-      role: role === "admin" ? "admin" : "member",
+      role: "member",
     });
 
     const accessToken = signAccessToken({ id: user._id.toString(), role: user.role });
@@ -109,7 +109,7 @@ const logout = async (req, res, next) => {
       try {
         const payload = verifyRefreshToken(token);
         await User.findByIdAndUpdate(payload.sub, { $inc: { tokenVersion: 1 } });
-      } catch (_) { /* expired token — still clear cookie */ }
+      } catch (_) { /* expired token; still clear cookie */ }
     }
     res.clearCookie("refreshToken", cookieOpts());
     return res.json({ message: "Logged out" });
@@ -124,9 +124,14 @@ const forgotPassword = async (req, res, next) => {
     if (!email) return res.status(400).json({ message: "Email is required" });
 
     const user = await User.findOne({ email: email.toLowerCase().trim() });
+    
+    // To prevent email enumeration, we always return a positive-sounding response
+    const responsePayload = {
+      message: "If that email exists, a reset link was sent",
+    };
+
     if (!user) {
-      // Don't leak whether email exists
-      return res.json({ message: "If that email exists, a reset link was sent" });
+      return res.json(responsePayload);
     }
 
     const token = crypto.randomBytes(32).toString("hex");
@@ -135,11 +140,27 @@ const forgotPassword = async (req, res, next) => {
     await user.save();
 
     const resetUrl = `${process.env.FRONTEND_URL}/reset-password?token=${token}&email=${encodeURIComponent(user.email)}`;
+    
+    if (process.env.NODE_ENV !== 'production') {
+      responsePayload.debugResetUrl = resetUrl;
+    }
+    
+    const smtpConfigured = Boolean(
+      process.env.SMTP_HOST &&
+      process.env.SMTP_PORT &&
+      process.env.SMTP_USER &&
+      process.env.SMTP_PASS
+    );
+
+    if (!smtpConfigured) {
+      console.warn(`Password reset mail is not configured. Using debug URL.`);
+      return res.json(responsePayload);
+    }
 
     try {
       await sendEmail({
         email: user.email,
-        subject: "IntellMeet – Reset your password",
+        subject: "IntellMeet - Reset your password",
         html: `
           <div style="font-family:sans-serif;max-width:480px;margin:auto;padding:32px;background:#f9fafb;border-radius:12px">
             <h2 style="color:#4f46e5;margin-bottom:8px">Reset your password</h2>
@@ -153,10 +174,11 @@ const forgotPassword = async (req, res, next) => {
       });
     } catch (mailErr) {
       console.error("Email send failed:", mailErr.message);
-      // Still return success — don't reveal SMTP issues to client
+      // Don't crash, still send the debug URL in dev
+      return res.json(responsePayload);
     }
 
-    return res.json({ message: "If that email exists, a reset link was sent" });
+    return res.json(responsePayload);
   } catch (err) {
     return next(err);
   }

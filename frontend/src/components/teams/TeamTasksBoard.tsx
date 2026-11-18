@@ -91,12 +91,11 @@ export function TeamTasksBoard({ teamId, projectId, viewMode }: TeamTasksBoardPr
       setSelectedProjectForTask(selectedProject);
       setIsCreateModalOpen(true);
     } else {
-      console.log("Please select a project first");
+      return;
     }
   };
 
   const handleModalClose = () => {
-    console.log("Closing modal and refetching tasks");
     setIsCreateModalOpen(false);
     setSelectedProjectForTask("");
     refetch();

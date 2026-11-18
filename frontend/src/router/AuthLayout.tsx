@@ -1,6 +1,7 @@
 import { Outlet } from 'react-router-dom'
 import { motion, type Variants } from 'framer-motion'
 import { ThemeToggle } from '../components/ThemeToggle'
+
 import { Video, Zap, Users, Brain } from 'lucide-react'
 
 const features = [
@@ -31,7 +32,13 @@ export default function AuthLayout() {
       {/* ── Left Panel ── */}
       <motion.div
         variants={slide(-1)}
-        className="hidden lg:flex flex-col justify-between w-[52%] relative overflow-hidden bg-primary px-16 py-14"
+        style={{
+          backgroundImage:
+            "linear-gradient(135deg, rgba(9,18,59,0.88), rgba(38,81,190,0.72)), url('https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=1400&q=80')",
+          backgroundSize: 'cover',
+          backgroundPosition: 'center',
+        }}
+        className="hidden lg:flex flex-col justify-between w-[52%] relative overflow-hidden px-16 py-14"
       >
         {/* Background circles */}
         <div className="absolute -top-32 -left-32 w-96 h-96 rounded-full bg-white/5 pointer-events-none" />
@@ -104,7 +111,7 @@ export default function AuthLayout() {
       {/* ── Right Panel ── */}
       <motion.div
         variants={slide(1)}
-        className="flex-1 flex flex-col items-center justify-center p-8 lg:p-16 relative"
+        className="flex-1 flex flex-col items-center justify-center p-8 lg:p-16 relative bg-[radial-gradient(circle_at_top,_rgba(59,130,246,0.16),_transparent_44%),linear-gradient(180deg,rgba(255,255,255,0.02),rgba(255,255,255,0.0))]"
       >
         {/* Mobile logo */}
         <motion.div
@@ -133,14 +140,9 @@ export default function AuthLayout() {
           <Outlet />
         </motion.div>
 
-        <motion.p
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.8 }}
-          className="text-muted-foreground text-xs mt-12"
-        >
-          © 2026 IntellMeet · Zidio Development
-        </motion.p>
+        <div className="mt-8 w-full max-w-[380px]">
+
+        </div>
       </motion.div>
     </motion.div>
   )

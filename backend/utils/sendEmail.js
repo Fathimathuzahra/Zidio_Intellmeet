@@ -1,10 +1,18 @@
 const nodemailer = require("nodemailer");
 
 const sendEmail = async (options) => {
+  const requiredEnv = ["SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS"];
+  const missing = requiredEnv.filter((name) => !process.env[name]);
+
+  if (missing.length) {
+    throw new Error(`Missing SMTP environment variables: ${missing.join(", ")}`);
+  }
+
+  const port = Number(process.env.SMTP_PORT);
   const transporter = nodemailer.createTransport({
     host: process.env.SMTP_HOST,
-    port: process.env.SMTP_PORT,
-    secure: false,
+    port,
+    secure: port === 465,
     auth: {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS,

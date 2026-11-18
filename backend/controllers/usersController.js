@@ -64,8 +64,6 @@ const updatePassword = async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
     
-    console.log("Updating password for user:", req.user.id);
-    
     if (!currentPassword || !newPassword) {
       return res.status(400).json({ 
         message: 'Current password and new password are required' 
@@ -97,8 +95,6 @@ const updatePassword = async (req, res) => {
     
     user.password = newPassword;
     await user.save();
-    
-    console.log("Password updated successfully for user:", req.user.id);
     
     res.json({ message: 'Password updated successfully' });
   } catch (error) {

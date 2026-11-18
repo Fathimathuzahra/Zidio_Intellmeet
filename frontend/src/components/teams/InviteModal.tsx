@@ -27,14 +27,15 @@ export function InviteModal({
 
   if (!isOpen) return null;
 
-  const selectedTeam = teams.find(team => team._id === teamId);
+  const effectiveTeamId = teamId || selectedTeamId || "";
+  const selectedTeam = teams.find(team => team._id === effectiveTeamId);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email.trim() || !teamId) return;
+    if (!email.trim() || !effectiveTeamId) return;
     
     setLoading(true);
-    await onInvite(email, teamId);
+    await onInvite(email, effectiveTeamId);
     setLoading(false);
     setEmail("");
     setTeamId("");
@@ -104,7 +105,7 @@ export function InviteModal({
                               Team ID: {team._id.slice(-6)}
                             </p>
                           </div>
-                          {teamId === team._id && (
+                          {effectiveTeamId === team._id && (
                             <Check size={16} className="text-primary" />
                           )}
                         </button>
@@ -138,7 +139,7 @@ export function InviteModal({
           {/* Submit Button */}
           <button 
             type="submit"
-            disabled={loading || !teamId || !email.trim() || isLoading}
+            disabled={loading || !effectiveTeamId || !email.trim() || isLoading}
             className="w-full bg-primary text-primary-foreground py-2 rounded-lg font-medium hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 transition-all"
           >
             {(loading || isLoading) && <Loader2 size={16} className="animate-spin" />}

@@ -4,7 +4,7 @@ const actionItemSchema = new mongoose.Schema({
   text: { type: String, required: true },
   assignee: { type: String, default: '' },
   completed: { type: Boolean, default: false },
-  status: { type: String, enum: ['todo', 'in-progress', 'done'], default: 'todo' },
+  status: { type: String, enum: ['todo', 'in_progress', 'done'], default: 'todo' },
   priority: { type: String, enum: ['Critical', 'High', 'Medium', 'Low'], default: 'Medium' },
   createdAt: { type: Date, default: Date.now }
 });

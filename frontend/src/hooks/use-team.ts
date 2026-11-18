@@ -65,7 +65,6 @@ export const useAcceptInvitation = () => {
 
   return useMutation({
     mutationFn: async (token: string) => {
-      console.log("Calling API with token:", token);
       const { data } = await api.post(`/teams/invitations/${token}/accept`);
       return data;
     },

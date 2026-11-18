@@ -1,5 +1,28 @@
 const Project = require("../models/Project");
 const Team = require("../models/Team");
+const { canAccessTeam, canManageTeam } = require("../utils/teamAccess");
+
+function hasSameId(value, userId) {
+  return value != null && String(value?._id || value) === String(userId);
+}
+
+function isProjectCreator(project, userId) {
+  return hasSameId(project.createdBy, userId);
+}
+
+function canAssignToTeamMember(team, userId) {
+  return hasSameId(team.owner, userId) || team.members.some((member) => hasSameId(member.user, userId));
+}
+
+async function getProjectAccess(project, user) {
+  const team = await Team.findById(project.team?._id || project.team);
+  const canAccess = canAccessTeam(team, user);
+  return {
+    team,
+    canAccess,
+    canManage: canAccess && (canManageTeam(team, user) || isProjectCreator(project, user.id)),
+  };
+}
 
 const createProject = async (req, res, next) => {
   try {
@@ -14,10 +37,7 @@ const createProject = async (req, res, next) => {
       return res.status(404).json({ message: "Team not found" });
     }
     
-    const isMember = team.members.some(m => m.user.toString() === req.user.id);
-    const isOwner = team.owner.toString() === req.user.id;
-    
-    if (!isMember && !isOwner) {
+    if (!canAccessTeam(team, req.user)) {
       return res.status(403).json({ message: "You are not a member of this team" });
     }
     
@@ -29,7 +49,6 @@ const createProject = async (req, res, next) => {
     });
 
     const savedProject = await newProject.save();
-    console.log("Project created:", savedProject,"for team:", team);
     
     const populatedProject = await Project.findById(savedProject._id)
       .populate('createdBy', 'name email')
@@ -54,7 +73,6 @@ const getProjectsByTeam = async (req, res, next) => {
       return res.status(401).json({ message: "User not authenticated" });
     }
     
-    console.log(`Fetching projects for team: ${teamId}, user: ${req.user.id}`);
     
     const team = await Team.findById(teamId).populate('members.user', '_id');
     
@@ -62,15 +80,7 @@ const getProjectsByTeam = async (req, res, next) => {
       return res.status(404).json({ message: "Team not found" });
     }
     
-    const userId = req.user.id.toString();
-    const isOwner = team.owner.toString() === userId;
-    const isMember = team.members.some(member => 
-      member.user._id.toString() === userId
-    );
-    
-    console.log(`User ${userId} - isOwner: ${isOwner}, isMember: ${isMember}`);
-    
-    if (!isMember && !isOwner) {
+    if (!canAccessTeam(team, req.user)) {
       return res.status(403).json({ 
         message: "Access denied. You are not a member of this team." 
       });
@@ -109,7 +119,6 @@ const getProjectsByTeam = async (req, res, next) => {
       };
     });
     
-    console.log(`Found ${formattedProjects.length} projects for team ${team.name}`);
     
     res.json(formattedProjects);
   } catch (error) {
@@ -131,12 +140,8 @@ const getProjectById = async (req, res, next) => {
       return res.status(404).json({ message: "Project not found" });
     }
     
-    const team = await Team.findById(project.team);
-    const isMember = team.members.some(m => m.user.toString() === req.user.id);
-    const isOwner = team.owner.toString() === req.user.id;
-    const isCreator = project.createdBy._id.toString() === req.user.id;
-    
-    if (!isMember && !isOwner && !isCreator) {
+    const { canAccess } = await getProjectAccess(project, req.user);
+    if (!canAccess) {
       return res.status(403).json({ message: "Access denied" });
     }
     
@@ -157,11 +162,8 @@ const updateProject = async (req, res, next) => {
       return res.status(404).json({ message: "Project not found" });
     }
     
-    const team = await Team.findById(project.team);
-    const isOwner = team.owner.toString() === req.user.id;
-    const isCreator = project.createdBy.toString() === req.user.id;
-    
-    if (!isOwner && !isCreator) {
+    const { canManage } = await getProjectAccess(project, req.user);
+    if (!canManage) {
       return res.status(403).json({ message: "Only project creator or team owner can edit" });
     }
     
@@ -191,11 +193,8 @@ const deleteProject = async (req, res, next) => {
       return res.status(404).json({ message: "Project not found" });
     }
     
-    const team = await Team.findById(project.team);
-    const isOwner = team.owner.toString() === req.user.id;
-    const isCreator = project.createdBy.toString() === req.user.id;
-    
-    if (!isOwner && !isCreator) {
+    const { canManage } = await getProjectAccess(project, req.user);
+    if (!canManage) {
       return res.status(403).json({ message: "Only project creator or team owner can delete" });
     }
     
@@ -211,7 +210,12 @@ const deleteProject = async (req, res, next) => {
 
 const getAllProjects = async (req, res, next) => {
   try {
-    const projects = await Project.find()
+    const query = req.user.role === "admin"
+      ? {}
+      : { team: { $in: (await Team.find({
+        $or: [{ owner: req.user.id }, { "members.user": req.user.id }],
+      }).select("_id")).map((team) => team._id) } };
+    const projects = await Project.find(query)
       .populate('createdBy', 'name email')
       .populate('team', 'name')
       .sort({ createdAt: -1 });
@@ -229,11 +233,14 @@ const addTask = async (req, res, next) => {
     const { projectId } = req.params;
     const { title, description, assignedTo, dueDate, priority, status } = req.body;
     
-    console.log("Adding task with data:", { title, description, assignedTo, dueDate, priority, status });
     
     const project = await Project.findById(projectId);
     if (!project) {
       return res.status(404).json({ message: "Project not found" });
+    }
+    const { team, canAccess } = await getProjectAccess(project, req.user);
+    if (!canAccess) {
+      return res.status(403).json({ message: "Access denied" });
     }
     const statusMap = {
       'todo': 'todo',
@@ -249,10 +256,9 @@ const addTask = async (req, res, next) => {
     if (assignedTo) {
       assignedToId = typeof assignedTo === 'string' ? assignedTo : assignedTo._id;
     }
-    console.log("Original status from frontend:", status);
-    console.log("Converted status:", backendStatus);
-    console.log("AssignedTo:", assignedTo);
-    console.log("AssignedTo ID:", assignedToId);
+    if (assignedToId && !canAssignToTeamMember(team, assignedToId)) {
+      return res.status(400).json({ message: "Task assignee must belong to this team" });
+    }
         
     const newTask = {
       title,
@@ -263,7 +269,6 @@ const addTask = async (req, res, next) => {
       priority: priority || 'Medium'
     };
     
-    console.log("Saving task:", newTask);
     
     project.tasks.push(newTask);
     await project.save();
@@ -273,7 +278,6 @@ const addTask = async (req, res, next) => {
       .populate('team', 'name')
       .populate('tasks.assignedTo', 'name email');
     
-    console.log("Task saved successfully");
     
     res.status(201).json(updatedProject);
   } catch (error) {
@@ -291,16 +295,40 @@ const updateTask = async (req, res, next) => {
     if (!project) {
       return res.status(404).json({ message: "Project not found" });
     }
+    const { team, canAccess } = await getProjectAccess(project, req.user);
+    if (!canAccess) {
+      return res.status(403).json({ message: "Access denied" });
+    }
     
     const task = project.tasks.id(taskId);
     if (!task) {
       return res.status(404).json({ message: "Task not found" });
     }
     
+    if (status !== undefined) {
+      if (typeof status !== "string") {
+        return res.status(400).json({ message: "Task status must be a string" });
+      }
+      const statusMap = {
+        'todo': 'todo',
+        'in-progress': 'in_progress',
+        'review': 'review',
+        'done': 'done'
+      };
+      const backendStatus = statusMap[status.toLowerCase()];
+      if (!backendStatus) return res.status(400).json({ message: "Invalid task status" });
+      task.status = backendStatus;
+    }
+
     if (title !== undefined) task.title = title;
     if (description !== undefined) task.description = description;
-    if (status !== undefined) task.status = status;
-    if (assignedTo !== undefined) task.assignedTo = assignedTo;
+    if (assignedTo !== undefined) {
+      const assignedToId = typeof assignedTo === "string" ? assignedTo : assignedTo?._id;
+      if (assignedToId && !canAssignToTeamMember(team, assignedToId)) {
+        return res.status(400).json({ message: "Task assignee must belong to this team" });
+      }
+      task.assignedTo = assignedToId || null;
+    }
     if (dueDate !== undefined) task.dueDate = dueDate;
     if (priority !== undefined) task.priority = priority;
     task.updatedAt = new Date();
@@ -327,12 +355,8 @@ const deleteTask = async (req, res, next) => {
       return res.status(404).json({ message: "Project not found" });
     }
     
-    const team = await Team.findById(project.team);
-    const isMember = team.members.some(m => m.user.toString() === req.user.id);
-    const isOwner = team.owner.toString() === req.user.id;
-    const isCreator = project.createdBy.toString() === req.user.id;
-    
-    if (!isMember && !isOwner && !isCreator) {
+    const { canAccess } = await getProjectAccess(project, req.user);
+    if (!canAccess) {
       return res.status(403).json({ message: "Not authorized to delete tasks" });
     }
     
@@ -351,11 +375,14 @@ const updateTaskStatus = async (req, res, next) => {
     const { projectId, taskId } = req.params;
     const { status } = req.body;
     
-    console.log(`Updating task ${taskId} to status: ${status}`);
     
     const project = await Project.findById(projectId);
     if (!project) {
       return res.status(404).json({ message: "Project not found" });
+    }
+    const { canAccess } = await getProjectAccess(project, req.user);
+    if (!canAccess) {
+      return res.status(403).json({ message: "Access denied" });
     }
     
     const task = project.tasks.id(taskId);
@@ -363,18 +390,25 @@ const updateTaskStatus = async (req, res, next) => {
       return res.status(404).json({ message: "Task not found" });
     }
     
-    const validStatuses = ['todo', 'in_progress', 'review', 'done'];
-    if (!validStatuses.includes(status)) {
+    const statusMap = {
+      'todo': 'todo',
+      'in-progress': 'in_progress',
+      'review': 'review',
+      'done': 'done'
+    };
+    
+    const backendStatus = typeof status === "string" ? statusMap[status.toLowerCase()] : undefined;
+
+    if (!backendStatus) {
       return res.status(400).json({ 
-        message: `Invalid status: ${status}. Allowed: ${validStatuses.join(', ')}` 
+        message: `Invalid status: ${status}. Allowed: ${Object.keys(statusMap).join(', ')}` 
       });
     }
     
-    task.status = status;
+    task.status = backendStatus;
     task.updatedAt = new Date();
     await project.save();
     
-    console.log(`Task ${taskId} status updated to ${task.status}`);
     
     res.json({
       success: true,
@@ -456,7 +490,6 @@ const getProjectTasks = async (req, res, next) => {
       done: formattedTasks.filter(t => t.status === 'DONE').length
     };
     
-    console.log(`Found ${formattedTasks.length} tasks for project ${project.name}`);
     
     res.json({
       projectId: project._id,
@@ -549,7 +582,6 @@ const getTeamTasks = async (req, res, next) => {
     
     allTasks.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     
-    console.log(`Found ${allTasks.length} tasks for team ${team.name}`);
     
     res.json({
       teamId,
@@ -569,7 +601,6 @@ const getMyTasks = async (req, res, next) => {
   try {
     const userId = req.user.id;
     
-    console.log(`Fetching tasks assigned to user: ${userId}`);
     
     const projects = await Project.find({ 
       status: 'active',
@@ -623,7 +654,6 @@ const getMyTasks = async (req, res, next) => {
       status: normalizeStatus(task.status)
     }));
     
-    console.log(`Found ${normalizedTasks.length} tasks assigned to user ${userId}`);
     
     res.json({
       totalTasks: normalizedTasks.length,

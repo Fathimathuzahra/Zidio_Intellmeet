@@ -1,8 +1,11 @@
 import { useState } from "react";
-import { Search, Users, MoreVertical, Loader2 } from "lucide-react";
+import { Search, Users, Loader2, Trash2 } from "lucide-react";
 import { motion } from "framer-motion";
+import { useToast } from "@/components/Toast";
+import { useRemoveMember } from "../../hooks/use-team";
 
 interface Member {
+  id?: string;
   name: string;
   email: string;
   role: string;
@@ -12,9 +15,14 @@ interface Member {
 interface MembersListProps {
   members: Member[];
   isLoading: boolean;
+  teamId?: string;
+  canRemove?: boolean;
 }
 
-export function MembersList({ members, isLoading }: MembersListProps) {
+export function MembersList({ members, isLoading, teamId, canRemove = false }: MembersListProps) {
+  const { toast } = useToast();
+  const [removingId, setRemovingId] = useState<string | null>(null);
+  const removeMember = useRemoveMember(teamId || "");
   const [search, setSearch] = useState("");
 
   const filteredMembers = members.filter(
@@ -74,7 +82,7 @@ export function MembersList({ members, isLoading }: MembersListProps) {
           <tbody className="divide-y divide-border">
             {filteredMembers.map((member, index) => (
               <motion.tr
-                key={member.email}
+                key={member.id ?? member.email}
                 initial={{ opacity: 0, x: -20 }}
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ delay: index * 0.05 }}
@@ -113,9 +121,34 @@ export function MembersList({ members, isLoading }: MembersListProps) {
                   </div>
                 </td>
                 <td className="px-6 py-4 text-right">
-                  <button className="p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors opacity-0 group-hover:opacity-100">
-                    <MoreVertical size={16} />
-                  </button>
+                  <div className="flex items-center justify-end gap-2">
+                    {canRemove && (
+                      <button
+                        onClick={async () => {
+                          if (!member.id) return;
+                          if (!confirm(`Remove ${member.name} from the team?`)) return;
+                          setRemovingId(member.id);
+                          try {
+                            await removeMember.mutateAsync(member.id);
+                            toast('success', `${member.name} removed`);
+                          } catch {
+                            toast('error', 'Failed to remove member');
+                          } finally {
+                            setRemovingId(null);
+                          }
+                        }}
+                        disabled={!member.id || removingId === member.id}
+                        className="p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors opacity-0 group-hover:opacity-100"
+                        title="Remove member"
+                      >
+                        {removingId === member.id ? (
+                          <Loader2 size={16} className="animate-spin" />
+                        ) : (
+                          <Trash2 size={16} />
+                        )}
+                      </button>
+                    )}
+                  </div>
                 </td>
               </motion.tr>
             ))}

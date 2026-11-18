@@ -1,33 +1,34 @@
 import { useState } from 'react'
-import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom'
+import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
   LayoutDashboard, Video, ClipboardList, Users,
-  BarChart3, LogOut, Search, Bell, Menu, X,
-  UserCog, ChevronRight, Sparkles,
+  BarChart3, Search, Bell, Menu,
+  UserCog, ChevronRight, PanelLeftClose, PanelLeftOpen,
 } from 'lucide-react'
 import { ThemeToggle } from '../components/ThemeToggle'
-import { useLogout } from '../hooks/useLogout'
+
 import { useAuthStore } from '../store/useAuthStore'
 import { meetingsService } from '../services/meetings.service'
 
 const navItems = [
-  { name: 'Dashboard',        href: '/dashboard', icon: LayoutDashboard, roles: ['admin', 'member'] },
-  { name: 'Meetings',         href: '/meetings',  icon: Video,           roles: ['admin', 'member'] },
-  { name: 'Action Items',     href: '/tasks',     icon: ClipboardList,   roles: ['admin', 'member'] },
-  { name: 'My Workspace',     href: '/my-teams',  icon: Users,           roles: ['member'] },
-  { name: 'Team Management',  href: '/teams',     icon: UserCog,         roles: ['admin'] },
-  { name: 'Analytics',        href: '/analytics', icon: BarChart3,       roles: ['admin'] },
+  { name: 'Dashboard',          href: '/dashboard', icon: LayoutDashboard, roles: ['admin', 'member'] },
+  { name: 'Meetings',           href: '/meetings',  icon: Video,           roles: ['admin', 'member'] },
+  { name: 'Action Items',       href: '/tasks',     icon: ClipboardList,   roles: ['admin', 'member'] },
+  { name: 'My Workspace',       href: '/my-teams',  icon: Users,           roles: ['admin', 'member'] },
+  { name: 'Team Management',    href: '/teams',     icon: UserCog,         roles: ['admin', 'member'] },
+  { name: 'Analytics',          href: '/analytics', icon: BarChart3,       roles: ['admin', 'member'] },
+  { name: 'Profile & Settings', href: '/profile',   icon: UserCog,         roles: ['admin', 'member'] },
 ]
 
 export default function DashboardLayout() {
   const location   = useLocation()
   const navigate   = useNavigate()
-  const logout     = useLogout()
   const user       = useAuthStore((s) => s.user)
   const isAdmin    = useAuthStore((s) => s.isAdmin())
 
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [desktopCollapsed, setDesktopCollapsed] = useState(false)
   const [notifOpen,   setNotifOpen]   = useState(false)
   const [search,      setSearch]      = useState('')
   const [readIds,     setReadIds]     = useState<Set<string>>(new Set())
@@ -72,98 +73,59 @@ export default function DashboardLayout() {
         />
       )}
 
-      {/* ── Sidebar ── */}
-      <aside className={`
-        fixed inset-y-0 left-0 z-50 w-64 flex flex-col
-        bg-sidebar border-r border-sidebar-border
-        transition-transform duration-300 ease-in-out
-        lg:translate-x-0 lg:static lg:inset-0
-        ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}
-      `}>
-        {/* Logo */}
-        <div className="flex items-center justify-between px-5 py-5 border-b border-sidebar-border shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-xl gradient-primary flex items-center justify-center shadow-md glow-sm shrink-0">
-              <Video size={15} className="text-white" />
-            </div>
-            <span className="font-bold text-lg tracking-tight text-sidebar-foreground">IntellMeet</span>
-          </div>
-          <button className="lg:hidden text-muted-foreground hover:text-foreground transition-colors p-1" onClick={() => setSidebarOpen(false)}>
-            <X size={18} />
+      <aside className={`fixed inset-y-0 left-0 z-50 flex w-72 flex-col border-r border-border bg-card shadow-2xl transition-transform duration-300 lg:hidden ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+        <div className="flex items-center justify-between border-b border-border px-5 py-4">
+          <button onClick={() => navigate('/dashboard')} className="flex items-center gap-3 text-left" aria-label="Go to dashboard">
+            <span className="grid h-10 w-10 place-items-center rounded-2xl gradient-primary text-white shadow-lg shadow-primary/25"><Video size={18} /></span>
+            <span><span className="block text-sm font-bold text-foreground">IntellMeet</span><span className="block text-xs text-muted-foreground">Enterprise workspace</span></span>
           </button>
+          <button onClick={() => setSidebarOpen(false)} className="rounded-xl p-2 text-muted-foreground transition hover:bg-muted hover:text-foreground" aria-label="Close navigation"><ChevronRight size={18} /></button>
         </div>
-
-        {/* Role badge */}
-        <div className="mx-4 mt-3 px-3 py-1.5 rounded-lg bg-primary/10 border border-primary/15 flex items-center justify-between shrink-0">
-          <span className="text-[11px] font-medium text-primary/80">Role</span>
-          <span className="text-[11px] font-bold text-primary uppercase tracking-wide">
-            {isAdmin ? 'Administrator' : 'Team Member'}
-          </span>
-        </div>
-
-        {/* Nav */}
-        <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto no-scrollbar">
+        <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-5" aria-label="Primary navigation">
           {navigation.map((item) => {
-            const active = location.pathname === item.href || location.pathname.startsWith(item.href + '/')
-            return (
-              <Link
-                key={item.name}
-                to={item.href}
-                onClick={() => setSidebarOpen(false)}
-                className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-150 group ${
-                  active
-                    ? 'gradient-primary text-white shadow-md glow-sm'
-                    : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
-                }`}
-              >
-                <item.icon size={17} className={active ? 'text-white' : ''} />
-                <span className="flex-1">{item.name}</span>
-                {active && <div className="w-1.5 h-1.5 rounded-full bg-white/70" />}
-              </Link>
-            )
+            const active = location.pathname === item.href || location.pathname.startsWith(`${item.href}/`)
+            return <button key={item.href} onClick={() => { navigate(item.href); setSidebarOpen(false) }} className={`flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left text-sm font-semibold transition ${active ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}>
+              <item.icon size={18} />{item.name}
+            </button>
           })}
         </nav>
+        <button onClick={() => { navigate('/profile'); setSidebarOpen(false) }} className="m-3 flex items-center gap-3 rounded-2xl border border-border bg-muted/30 p-3 text-left transition hover:bg-muted">
+          <span className="grid h-9 w-9 place-items-center rounded-full bg-primary/15 text-xs font-bold text-primary">{initials}</span>
+          <span className="min-w-0"><span className="block truncate text-sm font-semibold text-foreground">{user?.name || 'Your profile'}</span><span className="block truncate text-xs text-muted-foreground">Manage account</span></span>
+        </button>
+      </aside>
 
-        {/* AI Badge */}
-        <div className="mx-4 mb-3 p-3 rounded-xl bg-gradient-to-br from-primary/10 to-violet-500/10 border border-primary/20 shrink-0">
-          <div className="flex items-center gap-2 mb-1">
-            <Sparkles size={13} className="text-primary" />
-            <span className="text-xs font-bold text-foreground">AI-Powered</span>
-          </div>
-          <p className="text-[11px] text-muted-foreground leading-snug">
-            Auto-summaries and action items after every meeting.
-          </p>
-        </div>
 
-        {/* User + Logout */}
-        <div className="p-3 border-t border-sidebar-border space-y-1 shrink-0">
-          <button
-            onClick={() => navigate('/profile')}
-            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-sidebar-accent transition-colors group text-left"
-          >
-            <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center text-primary text-xs font-bold shrink-0 group-hover:bg-primary/30 transition-colors">
-              {initials}
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-xs font-semibold text-sidebar-foreground truncate">{user?.name ?? 'User'}</p>
-              <p className="text-[10px] text-muted-foreground truncate">{user?.email ?? ''}</p>
-            </div>
-            <ChevronRight size={13} className="text-muted-foreground/50 shrink-0" />
+      {/* ── Main ── */}
+      <aside className={`relative z-[70] hidden shrink-0 flex-col border-r border-border/80 bg-card/95 transition-[width] duration-300 lg:flex ${desktopCollapsed ? 'w-[76px]' : 'w-64'}`}>
+        <div className={`flex items-center border-b border-border py-5 ${desktopCollapsed ? 'justify-center px-3' : 'justify-between px-5'}`}>
+          <button onClick={() => navigate('/dashboard')} className="flex items-center gap-3 text-left" aria-label="Go to dashboard" title={desktopCollapsed ? 'IntellMeet' : undefined}>
+          <span className="grid h-10 w-10 place-items-center rounded-2xl gradient-primary text-white shadow-lg shadow-primary/25"><Video size={18} /></span>
+            {!desktopCollapsed && <span><span className="block text-base font-extrabold tracking-tight text-foreground">IntellMeet</span><span className="block text-[11px] font-medium text-muted-foreground">Enterprise workspace</span></span>}
           </button>
-          <button
-            onClick={logout}
-            className="flex w-full items-center gap-3 px-3 py-2.5 text-sm font-medium text-destructive hover:bg-destructive/8 rounded-xl transition-colors"
-          >
-            <LogOut size={16} />
-            Sign out
+          {!desktopCollapsed && <button onClick={() => setDesktopCollapsed(true)} className="grid h-8 w-8 place-items-center rounded-lg text-muted-foreground transition hover:bg-muted hover:text-foreground" aria-label="Collapse sidebar"><PanelLeftClose size={17} /></button>}
+        </div>
+        {desktopCollapsed && <button onClick={() => setDesktopCollapsed(false)} className="mx-auto mt-4 grid h-9 w-9 place-items-center rounded-xl border border-border text-muted-foreground transition hover:bg-muted hover:text-foreground" aria-label="Expand sidebar"><PanelLeftOpen size={17} /></button>}
+        <nav className={`flex-1 space-y-1 overflow-y-auto py-5 ${desktopCollapsed ? 'px-3' : 'px-3'}`} aria-label="Primary navigation">
+          {!desktopCollapsed && <p className="px-3 pb-2 text-[10px] font-bold uppercase tracking-[0.18em] text-muted-foreground">Workspace</p>}
+          {navigation.map((item) => {
+            const active = location.pathname === item.href || location.pathname.startsWith(`${item.href}/`)
+            return <button key={item.href} onClick={() => navigate(item.href)} title={desktopCollapsed ? item.name : undefined} className={`group flex w-full items-center rounded-xl py-2.5 text-left text-sm font-semibold transition-all duration-200 ${desktopCollapsed ? 'justify-center px-2' : 'gap-3 px-3'} ${active ? 'bg-primary text-primary-foreground shadow-md shadow-primary/20' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}>
+              <item.icon size={17} className={active ? '' : 'transition-transform group-hover:scale-110'} />{!desktopCollapsed && item.name}
+            </button>
+          })}
+        </nav>
+        <div className={`m-3 rounded-2xl border border-border bg-muted/35 p-3 ${desktopCollapsed ? 'p-2' : ''}`}>
+          <button onClick={() => navigate('/profile')} title={desktopCollapsed ? 'Profile & settings' : undefined} className={`flex w-full items-center text-left ${desktopCollapsed ? 'justify-center' : 'gap-3'}`}>
+            <span className="grid h-9 w-9 place-items-center rounded-full bg-primary/15 text-xs font-bold text-primary">{initials}</span>
+            {!desktopCollapsed && <span className="min-w-0"><span className="block truncate text-sm font-bold text-foreground">{user?.name || 'Your profile'}</span><span className="block truncate text-xs text-muted-foreground">Profile & settings</span></span>}
           </button>
         </div>
       </aside>
 
-      {/* ── Main ── */}
       <div className="flex-1 flex flex-col overflow-hidden min-w-0">
         {/* Header */}
-        <header className="h-14 bg-card/80 backdrop-blur-sm border-b border-border flex items-center justify-between px-4 lg:px-6 shrink-0 gap-3">
+        <header className="h-14 bg-card/95 backdrop-blur-sm border-b border-border flex items-center justify-between px-4 lg:px-6 shrink-0 gap-3 z-[60] relative">
           <div className="flex items-center gap-3 flex-1 min-w-0">
             <button
               className="lg:hidden p-2 text-muted-foreground hover:text-foreground hover:bg-muted rounded-lg transition-colors shrink-0"
@@ -272,9 +234,11 @@ export default function DashboardLayout() {
         </header>
 
         {/* Page content */}
-        <main className="flex-1 overflow-y-auto p-4 lg:p-7">
+        <main className="flex-1 overflow-y-auto min-w-0">
           <Outlet />
         </main>
+
+
       </div>
     </div>
   )

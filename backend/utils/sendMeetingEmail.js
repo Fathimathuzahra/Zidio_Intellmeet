@@ -3,7 +3,7 @@ const sendEmail = require('./sendEmail');
 const sendMeetingEmail = async ({ to, userName, meetingTitle, meetingTime, roomId, hostName, isScheduled }) => {
   const meetingLink = `${process.env.FRONTEND_URL}/meeting/${roomId}`;
   const date = new Date(meetingTime);
-  const formattedDate = date.toLocaleDateString('fr-FR', {
+  const formattedDate = date.toLocaleDateString('en-US', {
     weekday: 'long',
     year: 'numeric',
     month: 'long',
@@ -107,10 +107,10 @@ const sendMeetingEmail = async ({ to, userName, meetingTitle, meetingTime, roomI
     <body>
       <div class="container">
         <div class="header">
-          <h1>🎥 IntellMeet</h1>
+          <h1>IntellMeet</h1>
         </div>
         <div class="content">
-          <h2 style="margin-top: 0;">Bonjour ${userName},</h2>
+          <h2 style="margin-top: 0;">Hi ${userName},</h2>
           
           <p>${isScheduled ? 'A new meeting has been scheduled' : 'A meeting has just started'} on IntellMeet.</p>
           
@@ -130,12 +130,12 @@ const sendMeetingEmail = async ({ to, userName, meetingTitle, meetingTime, roomI
             </div>
             <div class="detail-row">
               <div class="detail-label">Status :</div>
-              <div class="detail-value"><span class="badge">Programmed</span></div>
+              <div class="detail-value"><span class="badge">Scheduled</span></div>
             </div>
             ` : `
             <div class="detail-row">
               <div class="detail-label">Status  :</div>
-              <div class="detail-value"><span class="badge" style="background-color:#d1fae5; color:#065f46;">En cours</span></div>
+              <div class="detail-value"><span class="badge" style="background-color:#d1fae5; color:#065f46;">Live now</span></div>
             </div>
             `}
             <div class="detail-row">
@@ -146,7 +146,7 @@ const sendMeetingEmail = async ({ to, userName, meetingTitle, meetingTime, roomI
           
           <div style="text-align: center;">
             <a href="${meetingLink}" class="button">
-              ${isScheduled ? 'Add to calendar & Join' : '🎥 Join the meeting'}
+              ${isScheduled ? 'Add to calendar & Join' : 'Join the meeting'}
             </a>
           </div>
           
@@ -165,7 +165,7 @@ const sendMeetingEmail = async ({ to, userName, meetingTitle, meetingTime, roomI
 
   await sendEmail({
     email: to,
-    subject: `${isScheduled ? '📅 Nouvelle réunion programmée' : '🎥 Nouvelle réunion en cours'} : ${meetingTitle}`,
+    subject: `${isScheduled ? 'New meeting scheduled' : 'Meeting is live'}: ${meetingTitle}`,
     html: emailHtml,
   });
 };
