@@ -2,14 +2,14 @@
 
 ## Implemented system
 
-IntellMeet is a MERN collaboration platform with JWT and refresh-token authentication, Google OAuth, role-aware team workspaces, invitations, projects and tasks, WebRTC video rooms, Socket.io chat/signalling, meeting history, action-item tracking, analytics, CSV export, and profile security controls.
+IntellMeet is a React and Express collaboration platform with JWT and refresh-token authentication, Google OAuth, role-aware team workspaces, invitations, projects and tasks, WebRTC video rooms, Socket.io chat/signalling, meeting history, action-item tracking, analytics, CSV export, and profile security controls.
 
 After microphone access is granted, supported browsers start live speech recognition automatically. Each attendee's final captions are relayed through Socket.IO, and the host's End Meeting action saves the combined captions, chat, and shared notes before automatically requesting a summary and action items. The host can review the result before saving it to the meeting record. Speech recognition depends on browser support and microphone permission; attendees can add shared notes when captions are unavailable. With `OPENAI_API_KEY`, the backend uses the configured OpenAI model. Without a key, it clearly identifies its transcript-based demo summary rather than claiming model-generated analysis.
 
 ## Architecture
 
 ```text
-React + Vite ── HTTPS / Socket.io ── Express API ── MongoDB
+React + Vite ? HTTPS / Socket.io ? Express API ? PostgreSQL (Prisma)
        │                                  │
        └──── WebRTC media (peer-to-peer) ─┴── OpenAI (optional analysis)
 ```
@@ -22,9 +22,9 @@ Self-registration assigns the least-privileged `member` role regardless of clien
 
 - `GET /api/health` provides readiness/liveness health data.
 - `GET /metrics` exposes lightweight Prometheus-compatible process metrics.
-- `docker compose up --build` runs MongoDB, API, and web containers locally.
+- `docker compose up --build` runs PostgreSQL, API, and web containers locally.
 - GitHub Actions runs frontend lint/build and backend tests on push and pull request.
-- `k8s/` contains scalable API and frontend templates with readiness/liveness probes and an API HPA. Configure images, TLS ingress, MongoDB, and secrets for your environment.
+- `k8s/` contains scalable API and frontend templates with readiness/liveness probes and an API HPA. Configure images, TLS ingress, PostgreSQL, and secrets for your environment.
 
 ## Verification
 
@@ -35,9 +35,9 @@ cd ../frontend && npm test && npm run lint && npm run build
 
 ## Deployment checklist
 
-1. Set `MONGO_URI`, JWT secrets, CORS/frontend origins, and optionally `OPENAI_API_KEY`.
+1. Set `DATABASE_URL`, JWT secrets, CORS/frontend origins, and optionally `OPENAI_API_KEY`.
 2. Build/publish the Docker images and replace placeholder image references in `k8s/`.
-3. Use a managed MongoDB deployment and a TURN service for reliable production WebRTC connectivity.
+3. Use a managed PostgreSQL deployment and a TURN service for reliable production WebRTC connectivity.
 4. Place Socket.io behind a sticky-session-compatible load balancer or adapter it through Redis before multi-replica realtime deployment.
 5. Run load tests and security scans in the target environment before publishing capacity, latency, or availability claims.
 

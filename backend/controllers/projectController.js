@@ -1,738 +1,191 @@
-const Project = require("../models/Project");
-const Team = require("../models/Team");
-const { canAccessTeam, canManageTeam } = require("../utils/teamAccess");
-
-function hasSameId(value, userId) {
-  return value != null && String(value?._id || value) === String(userId);
+﻿const prisma = require('../config/prisma');
+const { canAccessTeam, canManageTeam } = require('../utils/teamAccess');
+const projectInclude = { createdBy: { select: { id: true, name: true, email: true, avatarUrl: true } }, team: { select: { id: true, name: true } }, tasks: { include: { assignedTo: { select: { id: true, name: true, email: true } } }, orderBy: { createdAt: 'asc' } } };
+const idOf = (value) => value && String(value._id || value.id || value);
+const taskStatus = (status) => ({ todo: 'todo', in_progress: 'in-progress', review: 'review', done: 'done' }[status] || 'todo');
+function formatTask(task, project) {
+  return { _id: task.id, title: task.title, description: task.description || '', status: taskStatus(task.status),
+    assignedTo: task.assignedTo ? { _id: task.assignedTo.id, name: task.assignedTo.name, email: task.assignedTo.email } : undefined,
+    dueDate: task.dueDate, priority: task.priority || 'Medium', createdAt: task.createdAt, updatedAt: task.updatedAt,
+    ...(project ? { projectId: project.id, projectName: project.name } : {}) };
 }
-
-function isProjectCreator(project, userId) {
-  return hasSameId(project.createdBy, userId);
+function formatProject(project, includeTasks = true) {
+  return { _id: project.id, name: project.name, description: project.description || '', team: project.team ? { _id: project.team.id, name: project.team.name } : project.teamId,
+    createdBy: project.createdBy ? { _id: project.createdBy.id, name: project.createdBy.name, email: project.createdBy.email, ...(project.createdBy.avatarUrl ? { avatarUrl: project.createdBy.avatarUrl } : {}) } : project.createdById,
+    ...(includeTasks ? { tasks: (project.tasks || []).map((task) => formatTask(task)) } : {}), status: project.status, createdAt: project.createdAt, updatedAt: project.updatedAt };
 }
-
-function canAssignToTeamMember(team, userId) {
-  return hasSameId(team.owner, userId) || team.members.some((member) => hasSameId(member.user, userId));
-}
-
 async function getProjectAccess(project, user) {
-  const team = await Team.findById(project.team?._id || project.team);
-  const canAccess = canAccessTeam(team, user);
-  return {
-    team,
-    canAccess,
-    canManage: canAccess && (canManageTeam(team, user) || isProjectCreator(project, user.id)),
-  };
+  const team = project.teamId ? await prisma.team.findUnique({ where: { id: project.teamId }, include: { members: true } }) : null;
+  const canAccess = user?.role === 'admin' || canAccessTeam(team, user);
+  return { team, canAccess, canManage: canAccess && (user?.role === 'admin' || canManageTeam(team, user) || project.createdById === user.id) };
 }
-
-const createProject = async (req, res, next) => {
+function canAssignToTeamMember(team, userId) { return Boolean(team && (team.ownerId === userId || team.members.some((m) => m.userId === userId))); }
+async function createProject(req, res, next) {
   try {
     const { name, description, teamId } = req.body;
-    
-    if (!req.user || !req.user.id) {
-      return res.status(401).json({ message: "User not authenticated" });
-    }
-    
-    const team = await Team.findById(teamId);
-    if (!team) {
-      return res.status(404).json({ message: "Team not found" });
-    }
-    
-    if (!canAccessTeam(team, req.user)) {
-      return res.status(403).json({ message: "You are not a member of this team" });
-    }
-    
-    const newProject = new Project({
-      name,
-      description: description || '',
-      team: teamId,
-      createdBy: req.user.id
-    });
-
-    const savedProject = await newProject.save();
-    
-    const populatedProject = await Project.findById(savedProject._id)
-      .populate('createdBy', 'name email')
-      .populate('team', 'name');
-    
-    res.status(201).json(populatedProject);
-  } catch (error) {
-    console.error("Error creating project:", error);
-    next(error);
-  }
-};
-
-const getProjectsByTeam = async (req, res, next) => {
+    if (!req.user?.id) return res.status(401).json({ message: 'User not authenticated' });
+    const team = teamId ? await prisma.team.findUnique({ where: { id: teamId }, include: { members: true } }) : null;
+    if (!team) return res.status(404).json({ message: 'Team not found' });
+    if (!canAccessTeam(team, req.user)) return res.status(403).json({ message: 'You are not a member of this team' });
+    const project = await prisma.project.create({ data: { name, description: description || '', teamId, createdById: req.user.id }, include: projectInclude });
+    res.status(201).json(formatProject(project));
+  } catch (error) { console.error('Error creating project:', error); next(error); }
+}
+async function getProjectsByTeam(req, res, next) {
   try {
     const { teamId } = req.params;
-    
-    if (!teamId) {
-      return res.status(400).json({ message: "Team ID is required" });
-    }
-    
-    if (!req.user || !req.user.id) {
-      return res.status(401).json({ message: "User not authenticated" });
-    }
-    
-    
-    const team = await Team.findById(teamId).populate('members.user', '_id');
-    
-    if (!team) {
-      return res.status(404).json({ message: "Team not found" });
-    }
-    
-    if (!canAccessTeam(team, req.user)) {
-      return res.status(403).json({ 
-        message: "Access denied. You are not a member of this team." 
-      });
-    }
-    
-    const projects = await Project.find({ 
-      team: teamId, 
-      status: 'active' 
-    })
-    .populate('createdBy', 'name email avatarUrl')
-    .populate('team', 'name')
-    .sort({ createdAt: -1 });
-    
-    const normalizeTaskStatus = (status) => {
-      const statusMap = {
-        'TODO': 'todo',
-        'IN-PROGRESS': 'in-progress',
-        'IN_PROGRESS': 'in-progress',
-        'REVIEW': 'review',
-        'DONE': 'done'
-      };
-      return statusMap[status?.toUpperCase()] || 'todo';
-    };
-    
-    const formattedProjects = projects.map(project => {
-      const projectObj = project.toObject();
-      
-      const normalizedTasks = (projectObj.tasks || []).map(task => ({
-        ...task,
-        status: normalizeTaskStatus(task.status)
-      }));
-      
-      return {
-        ...projectObj,
-        tasks: normalizedTasks
-      };
-    });
-    
-    
-    res.json(formattedProjects);
-  } catch (error) {
-    console.error("Error fetching projects:", error);
-    next(error);
-  }
-};
-
-const getProjectById = async (req, res, next) => {
+    if (!teamId) return res.status(400).json({ message: 'Team ID is required' });
+    if (!req.user?.id) return res.status(401).json({ message: 'User not authenticated' });
+    const team = await prisma.team.findUnique({ where: { id: teamId }, include: { members: true } });
+    if (!team) return res.status(404).json({ message: 'Team not found' });
+    if (!canAccessTeam(team, req.user)) return res.status(403).json({ message: 'Access denied. You are not a member of this team.' });
+    const projects = await prisma.project.findMany({ where: { teamId, status: 'active' }, orderBy: { createdAt: 'desc' }, include: projectInclude });
+    res.json(projects.map((project) => formatProject(project)));
+  } catch (error) { console.error('Error fetching projects:', error); next(error); }
+}
+async function getProjectById(req, res, next) {
   try {
-    const { id } = req.params;
-    
-    const project = await Project.findById(id)
-      .populate('createdBy', 'name email')
-      .populate('team', 'name')
-      .populate('tasks.assignedTo', 'name email');
-    
-    if (!project) {
-      return res.status(404).json({ message: "Project not found" });
-    }
-    
-    const { canAccess } = await getProjectAccess(project, req.user);
-    if (!canAccess) {
-      return res.status(403).json({ message: "Access denied" });
-    }
-    
-    res.json(project);
-  } catch (error) {
-    console.error("Error fetching project:", error);
-    next(error);
-  }
-};
-
-const updateProject = async (req, res, next) => {
+    const project = await prisma.project.findUnique({ where: { id: req.params.id }, include: projectInclude });
+    if (!project) return res.status(404).json({ message: 'Project not found' });
+    if (!(await getProjectAccess(project, req.user)).canAccess) return res.status(403).json({ message: 'Access denied' });
+    res.json(formatProject(project));
+  } catch (error) { console.error('Error fetching project:', error); next(error); }
+}
+async function updateProject(req, res, next) {
   try {
-    const { id } = req.params;
-    const { name, description } = req.body;
-    
-    const project = await Project.findById(id);
-    if (!project) {
-      return res.status(404).json({ message: "Project not found" });
-    }
-    
-    const { canManage } = await getProjectAccess(project, req.user);
-    if (!canManage) {
-      return res.status(403).json({ message: "Only project creator or team owner can edit" });
-    }
-    
-    const updatedProject = await Project.findByIdAndUpdate(
-      id,
-      { 
-        name: name || project.name,
-        description: description !== undefined ? description : project.description,
-        updatedAt: new Date()
-      },
-      { new: true, runValidators: true }
-    ).populate('createdBy', 'name email').populate('team', 'name');
-    
-    res.json(updatedProject);
-  } catch (error) {
-    console.error("Error updating project:", error);
-    next(error);
-  }
-};
-
-const deleteProject = async (req, res, next) => {
+    const existing = await prisma.project.findUnique({ where: { id: req.params.id } });
+    if (!existing) return res.status(404).json({ message: 'Project not found' });
+    if (!(await getProjectAccess(existing, req.user)).canManage) return res.status(403).json({ message: 'Only project creator or team owner can edit' });
+    const data = {};
+    if (req.body.name) data.name = req.body.name;
+    if (req.body.description !== undefined) data.description = req.body.description;
+    const project = await prisma.project.update({ where: { id: existing.id }, data, include: projectInclude });
+    res.json(formatProject(project));
+  } catch (error) { console.error('Error updating project:', error); next(error); }
+}
+async function deleteProject(req, res, next) {
   try {
-    const { id } = req.params;
-    
-    const project = await Project.findById(id);
-    if (!project) {
-      return res.status(404).json({ message: "Project not found" });
-    }
-    
-    const { canManage } = await getProjectAccess(project, req.user);
-    if (!canManage) {
-      return res.status(403).json({ message: "Only project creator or team owner can delete" });
-    }
-    
-    project.status = 'archived';
-    await project.save();
-    
-    res.json({ message: "Project archived successfully" });
-  } catch (error) {
-    console.error("Error deleting project:", error);
-    next(error);
-  }
-};
-
-const getAllProjects = async (req, res, next) => {
+    const project = await prisma.project.findUnique({ where: { id: req.params.id } });
+    if (!project) return res.status(404).json({ message: 'Project not found' });
+    if (!(await getProjectAccess(project, req.user)).canManage) return res.status(403).json({ message: 'Only project creator or team owner can delete' });
+    await prisma.project.update({ where: { id: project.id }, data: { status: 'archived' } });
+    res.json({ message: 'Project archived successfully' });
+  } catch (error) { console.error('Error deleting project:', error); next(error); }
+}
+async function getAllProjects(req, res, next) {
   try {
-    const query = req.user.role === "admin"
-      ? {}
-      : { team: { $in: (await Team.find({
-        $or: [{ owner: req.user.id }, { "members.user": req.user.id }],
-      }).select("_id")).map((team) => team._id) } };
-    const projects = await Project.find(query)
-      .populate('createdBy', 'name email')
-      .populate('team', 'name')
-      .sort({ createdAt: -1 });
-    
-    res.json(projects);
-  } catch (error) {
-    console.error("Error fetching all projects:", error);
-    next(error);
-  }
-};
-
-
-const addTask = async (req, res, next) => {
+    const teamIds = req.user.role === 'admin' ? undefined : (await prisma.team.findMany({ where: { OR: [{ ownerId: req.user.id }, { members: { some: { userId: req.user.id } } }] }, select: { id: true } })).map((t) => t.id);
+    const projects = await prisma.project.findMany({ where: teamIds ? { teamId: { in: teamIds } } : {}, orderBy: { createdAt: 'desc' }, include: projectInclude });
+    res.json(projects.map((project) => formatProject(project)));
+  } catch (error) { console.error('Error fetching all projects:', error); next(error); }
+}
+async function addTask(req, res, next) {
   try {
     const { projectId } = req.params;
+    const project = await prisma.project.findUnique({ where: { id: projectId } });
+    if (!project) return res.status(404).json({ message: 'Project not found' });
+    const { team, canAccess } = await getProjectAccess(project, req.user);
+    if (!canAccess) return res.status(403).json({ message: 'Access denied' });
     const { title, description, assignedTo, dueDate, priority, status } = req.body;
-    
-    
-    const project = await Project.findById(projectId);
-    if (!project) {
-      return res.status(404).json({ message: "Project not found" });
-    }
-    const { team, canAccess } = await getProjectAccess(project, req.user);
-    if (!canAccess) {
-      return res.status(403).json({ message: "Access denied" });
-    }
-    const statusMap = {
-      'todo': 'todo',
-      'in-progress': 'in_progress',
-      'in_progress': 'in_progress',
-      'review': 'review',
-      'done': 'done'
-    };
-    
-    const backendStatus = statusMap[status?.toLowerCase()] || 'todo';
-    
-    let assignedToId = null;
-    if (assignedTo) {
-      assignedToId = typeof assignedTo === 'string' ? assignedTo : assignedTo._id;
-    }
-    if (assignedToId && !canAssignToTeamMember(team, assignedToId)) {
-      return res.status(400).json({ message: "Task assignee must belong to this team" });
-    }
-        
-    const newTask = {
-      title,
-      description: description || '',
-      status: backendStatus,
-      assignedTo: assignedToId,
-      dueDate: dueDate || null,
-      priority: priority || 'Medium'
-    };
-    
-    
-    project.tasks.push(newTask);
-    await project.save();
-    
-    const updatedProject = await Project.findById(project._id)
-      .populate('createdBy', 'name email')
-      .populate('team', 'name')
-      .populate('tasks.assignedTo', 'name email');
-    
-    
-    res.status(201).json(updatedProject);
-  } catch (error) {
-    console.error("Error adding task:", error);
-    next(error);
-  }
-};
-
-const updateTask = async (req, res, next) => {
+    const state = { todo: 'todo', 'in-progress': 'in_progress', in_progress: 'in_progress', review: 'review', done: 'done' }[status?.toLowerCase()] || 'todo';
+    const assignedToId = idOf(assignedTo);
+    if (assignedToId && !canAssignToTeamMember(team, assignedToId)) return res.status(400).json({ message: 'Task assignee must belong to this team' });
+    await prisma.projectTask.create({ data: { projectId, title, description: description || '', status: state, assignedToId: assignedToId || null, dueDate: dueDate ? new Date(dueDate) : null, priority: priority || 'Medium' } });
+    const updated = await prisma.project.findUnique({ where: { id: projectId }, include: projectInclude });
+    res.status(201).json(formatProject(updated));
+  } catch (error) { console.error('Error adding task:', error); next(error); }
+}
+async function updateTask(req, res, next) {
   try {
     const { projectId, taskId } = req.params;
+    const project = await prisma.project.findUnique({ where: { id: projectId } });
+    if (!project) return res.status(404).json({ message: 'Project not found' });
+    const { team, canAccess } = await getProjectAccess(project, req.user);
+    if (!canAccess) return res.status(403).json({ message: 'Access denied' });
+    const task = await prisma.projectTask.findFirst({ where: { id: taskId, projectId } });
+    if (!task) return res.status(404).json({ message: 'Task not found' });
     const { title, description, status, assignedTo, dueDate, priority } = req.body;
-    
-    const project = await Project.findById(projectId);
-    if (!project) {
-      return res.status(404).json({ message: "Project not found" });
-    }
-    const { team, canAccess } = await getProjectAccess(project, req.user);
-    if (!canAccess) {
-      return res.status(403).json({ message: "Access denied" });
-    }
-    
-    const task = project.tasks.id(taskId);
-    if (!task) {
-      return res.status(404).json({ message: "Task not found" });
-    }
-    
+    const data = {};
     if (status !== undefined) {
-      if (typeof status !== "string") {
-        return res.status(400).json({ message: "Task status must be a string" });
-      }
-      const statusMap = {
-        'todo': 'todo',
-        'in-progress': 'in_progress',
-        'review': 'review',
-        'done': 'done'
-      };
-      const backendStatus = statusMap[status.toLowerCase()];
-      if (!backendStatus) return res.status(400).json({ message: "Invalid task status" });
-      task.status = backendStatus;
+      if (typeof status !== 'string') return res.status(400).json({ message: 'Task status must be a string' });
+      const state = { todo: 'todo', 'in-progress': 'in_progress', in_progress: 'in_progress', review: 'review', done: 'done' }[status.toLowerCase()];
+      if (!state) return res.status(400).json({ message: 'Invalid task status' });
+      data.status = state;
     }
-
-    if (title !== undefined) task.title = title;
-    if (description !== undefined) task.description = description;
+    if (title !== undefined) data.title = title;
+    if (description !== undefined) data.description = description;
     if (assignedTo !== undefined) {
-      const assignedToId = typeof assignedTo === "string" ? assignedTo : assignedTo?._id;
-      if (assignedToId && !canAssignToTeamMember(team, assignedToId)) {
-        return res.status(400).json({ message: "Task assignee must belong to this team" });
-      }
-      task.assignedTo = assignedToId || null;
+      const assignedToId = idOf(assignedTo);
+      if (assignedToId && !canAssignToTeamMember(team, assignedToId)) return res.status(400).json({ message: 'Task assignee must belong to this team' });
+      data.assignedToId = assignedToId || null;
     }
-    if (dueDate !== undefined) task.dueDate = dueDate;
-    if (priority !== undefined) task.priority = priority;
-    task.updatedAt = new Date();
-    
-    await project.save();
-    
-    const updatedProject = await Project.findById(project._id)
-      .populate('createdBy', 'name email')
-      .populate('tasks.assignedTo', 'name email');
-    
-    res.json(updatedProject);
-  } catch (error) {
-    console.error("Error updating task:", error);
-    next(error);
-  }
-};
-
-const deleteTask = async (req, res, next) => {
+    if (dueDate !== undefined) data.dueDate = dueDate ? new Date(dueDate) : null;
+    if (priority !== undefined) data.priority = priority;
+    await prisma.projectTask.update({ where: { id: taskId }, data });
+    res.json(formatProject(await prisma.project.findUnique({ where: { id: projectId }, include: projectInclude })));
+  } catch (error) { console.error('Error updating task:', error); next(error); }
+}
+async function deleteTask(req, res, next) {
+  try {
+    const project = await prisma.project.findUnique({ where: { id: req.params.projectId } });
+    if (!project) return res.status(404).json({ message: 'Project not found' });
+    if (!(await getProjectAccess(project, req.user)).canAccess) return res.status(403).json({ message: 'Not authorized to delete tasks' });
+    const deleted = await prisma.projectTask.deleteMany({ where: { id: req.params.taskId, projectId: project.id } });
+    if (!deleted.count) return res.status(404).json({ message: 'Task not found' });
+    res.json({ message: 'Task deleted successfully' });
+  } catch (error) { console.error('Error deleting task:', error); next(error); }
+}
+async function updateTaskStatus(req, res, next) {
   try {
     const { projectId, taskId } = req.params;
-    
-    const project = await Project.findById(projectId);
-    if (!project) {
-      return res.status(404).json({ message: "Project not found" });
-    }
-    
-    const { canAccess } = await getProjectAccess(project, req.user);
-    if (!canAccess) {
-      return res.status(403).json({ message: "Not authorized to delete tasks" });
-    }
-    
-    project.tasks.id(taskId).deleteOne();
-    await project.save();
-    
-    res.json({ message: "Task deleted successfully" });
-  } catch (error) {
-    console.error("Error deleting task:", error);
-    next(error);
-  }
-};
-
-const updateTaskStatus = async (req, res, next) => {
+    const project = await prisma.project.findUnique({ where: { id: projectId } });
+    if (!project) return res.status(404).json({ message: 'Project not found' });
+    if (!(await getProjectAccess(project, req.user)).canAccess) return res.status(403).json({ message: 'Access denied' });
+    const task = await prisma.projectTask.findFirst({ where: { id: taskId, projectId } });
+    if (!task) return res.status(404).json({ message: 'Task not found' });
+    const statusMap = { todo: 'todo', 'in-progress': 'in_progress', review: 'review', done: 'done' };
+    const status = typeof req.body.status === 'string' ? statusMap[req.body.status.toLowerCase()] : undefined;
+    if (!status) return res.status(400).json({ message: `Invalid status: ${req.body.status}. Allowed: ${Object.keys(statusMap).join(', ')}` });
+    const updated = await prisma.projectTask.update({ where: { id: task.id }, data: { status } });
+    res.json({ success: true, message: 'Task status updated successfully', task: { _id: updated.id, taskId: updated.id, title: updated.title, status: updated.status, updatedAt: updated.updatedAt } });
+  } catch (error) { console.error('Error updating task status:', error); next(error); }
+}
+async function getProjectTasks(req, res, next) {
   try {
-    const { projectId, taskId } = req.params;
-    const { status } = req.body;
-    
-    
-    const project = await Project.findById(projectId);
-    if (!project) {
-      return res.status(404).json({ message: "Project not found" });
-    }
-    const { canAccess } = await getProjectAccess(project, req.user);
-    if (!canAccess) {
-      return res.status(403).json({ message: "Access denied" });
-    }
-    
-    const task = project.tasks.id(taskId);
-    if (!task) {
-      return res.status(404).json({ message: "Task not found" });
-    }
-    
-    const statusMap = {
-      'todo': 'todo',
-      'in-progress': 'in_progress',
-      'review': 'review',
-      'done': 'done'
-    };
-    
-    const backendStatus = typeof status === "string" ? statusMap[status.toLowerCase()] : undefined;
-
-    if (!backendStatus) {
-      return res.status(400).json({ 
-        message: `Invalid status: ${status}. Allowed: ${Object.keys(statusMap).join(', ')}` 
-      });
-    }
-    
-    task.status = backendStatus;
-    task.updatedAt = new Date();
-    await project.save();
-    
-    
-    res.json({
-      success: true,
-      message: "Task status updated successfully",
-      task: {
-        _id: task._id,
-        taskId: task._id,
-        title: task.title,
-        status: task.status,
-        updatedAt: task.updatedAt
-      }
-    });
-  } catch (error) {
-    console.error("Error updating task status:", error);
-    next(error);
-  }
-};
-
-const getProjectTasks = async (req, res, next) => {
+    const project = await prisma.project.findUnique({ where: { id: req.params.projectId }, include: { createdBy: true, team: { include: { members: true } }, tasks: { include: { assignedTo: true } } } });
+    if (!project) return res.status(404).json({ message: 'Project not found' });
+    if (!(await getProjectAccess(project, req.user)).canAccess) return res.status(403).json({ message: 'Access denied' });
+    const tasks = project.tasks.map((task) => formatTask(task, project));
+    res.json({ projectId: project.id, projectName: project.name, projectDescription: project.description || '', totalTasks: tasks.length, tasks,
+      stats: { todo: tasks.filter((t) => t.status === 'todo').length, inProgress: tasks.filter((t) => t.status === 'in-progress').length, review: tasks.filter((t) => t.status === 'review').length, done: tasks.filter((t) => t.status === 'done').length } });
+  } catch (error) { console.error('Error fetching project tasks:', error); next(error); }
+}
+async function getTeamTasks(req, res, next) {
   try {
-    const { projectId } = req.params;
-    
-    const project = await Project.findById(projectId)
-      .populate('createdBy', 'name email')
-      .populate('team', 'name')
-      .populate('tasks.assignedTo', 'name email');
-    
-    if (!project) {
-      return res.status(404).json({ message: "Project not found" });
-    }
-    
-    const team = await Team.findById(project.team);
-    const userId = req.user.id.toString();
-    const isMember = team.members.some(m => m.user.toString() === userId);
-    const isOwner = team.owner.toString() === userId;
-    const isCreator = project.createdBy._id.toString() === userId;
-    
-    if (!isMember && !isOwner && !isCreator) {
-      return res.status(403).json({ message: "Access denied" });
-    }
-    
-    const normalizeStatus = (status) => {
-      const statusMap = {
-        'TODO': 'todo',
-        'IN-PROGRESS': 'in-progress',
-        'IN_PROGRESS': 'in-progress',
-        'REVIEW': 'review',
-        'DONE': 'done'
-      };
-      return statusMap[status?.toUpperCase()] || 'todo';
-    };
-    
-    const formattedTasks = project.tasks.map(task => {
-      const taskObj = task.toObject();
-      return {
-        _id: taskObj._id,
-        taskId: taskObj._id,
-        title: taskObj.title,
-        description: taskObj.description || '',
-        status: normalizeStatus(taskObj.status),
-        priority: taskObj.priority || 'Medium',
-        assignedTo: taskObj.assignedTo ? {
-          _id: taskObj.assignedTo._id,
-          name: taskObj.assignedTo.name,
-          email: taskObj.assignedTo.email
-        } : undefined,
-        dueDate: taskObj.dueDate,
-        createdAt: taskObj.createdAt,
-        updatedAt: taskObj.updatedAt,
-        projectId: project._id,
-        projectName: project.name
-      };
-    });
-    
-    const stats = {
-      todo: formattedTasks.filter(t => t.status === 'TODO').length,
-      inProgress: formattedTasks.filter(t => t.status === 'IN_PROGRESS').length,
-      review: formattedTasks.filter(t => t.status === 'REVIEW').length,
-      done: formattedTasks.filter(t => t.status === 'DONE').length
-    };
-    
-    
-    res.json({
-      projectId: project._id,
-      projectName: project.name,
-      projectDescription: project.description || '',
-      totalTasks: formattedTasks.length,
-      tasks: formattedTasks,
-      stats
-    });
-  } catch (error) {
-    console.error("Error fetching project tasks:", error);
-    next(error);
-  }
-};
-
-const getTeamTasks = async (req, res, next) => {
+    const team = await prisma.team.findUnique({ where: { id: req.params.teamId }, include: { members: true } });
+    if (!team) return res.status(404).json({ message: 'Team not found' });
+    if (!canAccessTeam(team, req.user)) return res.status(403).json({ message: 'Access denied' });
+    const projects = await prisma.project.findMany({ where: { teamId: team.id, status: 'active' }, select: { id: true, name: true, tasks: { include: { assignedTo: true } } } });
+    const tasks = projects.flatMap((project) => project.tasks.map((task) => formatTask(task, project))).sort((a, b) => b.createdAt - a.createdAt);
+    res.json({ teamId: team.id, teamName: team.name, totalTasks: tasks.length, tasks });
+  } catch (error) { console.error('Error fetching team tasks:', error); next(error); }
+}
+async function getMyTasks(req, res, next) {
   try {
-    const { teamId } = req.params;
-    
-    const team = await Team.findById(teamId);
-    if (!team) {
-      return res.status(404).json({ message: "Team not found" });
-    }
-    
-    const userId = req.user.id.toString();
-    const isMember = team.members.some(m => m.user.toString() === userId);
-    const isOwner = team.owner.toString() === userId;
-    
-    if (!isMember && !isOwner) {
-      return res.status(403).json({ message: "Access denied" });
-    }
-    
-    const projects = await Project.find({ 
-      team: teamId, 
-      status: 'active' 
-    })
-    .select('_id name tasks')
-    .populate('tasks.assignedTo', 'name email');
-    
-    const normalizeStatus = (status) => {
-      const statusMap = {
-        'TODO': 'todo',
-        'IN-PROGRESS': 'in-progress',
-        'IN_PROGRESS': 'in-progress',
-        'REVIEW': 'review',
-        'DONE': 'done'
-      };
-      return statusMap[status?.toUpperCase()] || 'todo';
-    };
-    
-    const allTasks = [];
-    projects.forEach(project => {
-      const tasksWithProject = project.tasks.map(task => {
-        const taskObj = task.toObject();
-        
-        let assignedToData = undefined;
-        if (taskObj.assignedTo) {
-          if (typeof taskObj.assignedTo === 'object' && taskObj.assignedTo._id) {
-            assignedToData = {
-              _id: taskObj.assignedTo._id,
-              name: taskObj.assignedTo.name || 'Unknown',
-              email: taskObj.assignedTo.email || ''
-            };
-          } else if (typeof taskObj.assignedTo === 'string') {
-            assignedToData = {
-              _id: taskObj.assignedTo,
-              name: 'Unknown',
-              email: ''
-            };
-          }
-        }
-        
-        return {
-          _id: taskObj._id,
-          taskId: taskObj._id,
-          title: taskObj.title,
-          description: taskObj.description || '',
-          status: normalizeStatus(taskObj.status),
-          priority: taskObj.priority || 'Medium',
-          assignedTo: assignedToData,
-          dueDate: taskObj.dueDate,
-          createdAt: taskObj.createdAt,
-          updatedAt: taskObj.updatedAt,
-          projectId: project._id,
-          projectName: project.name
-        };
-      });
-      allTasks.push(...tasksWithProject);
-    });
-    
-    allTasks.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-    
-    
-    res.json({
-      teamId,
-      teamName: team.name,
-      totalTasks: allTasks.length,
-      tasks: allTasks
-    });
-  } catch (error) {
-    console.error("Error fetching team tasks:", error);
-    next(error);
-  }
-};
-
-
-
-const getMyTasks = async (req, res, next) => {
-  try {
-    const userId = req.user.id;
-    
-    
-    const projects = await Project.find({ 
-      status: 'active',
-      'tasks.assignedTo': userId 
-    })
-    .select('_id name tasks')
-    .populate('tasks.assignedTo', 'name email');
-    
-    const myTasks = [];
-    projects.forEach(project => {
-      const userTasks = project.tasks.filter(task => 
-        task.assignedTo && task.assignedTo._id.toString() === userId
-      );
-      
-      userTasks.forEach(task => {
-        myTasks.push({
-          _id: task._id,
-          taskId: task._id,
-          title: task.title,
-          description: task.description || '',
-          status: task.status,
-          priority: task.priority || 'Medium',
-          assignedTo: {
-            _id: task.assignedTo._id,
-            name: task.assignedTo.name,
-            email: task.assignedTo.email
-          },
-          dueDate: task.dueDate,
-          createdAt: task.createdAt,
-          updatedAt: task.updatedAt,
-          projectId: project._id,
-          projectName: project.name
-        });
-      });
-    });
-    
-
-    const normalizeStatus = (status) => {
-      const statusMap = {
-        'TODO': 'todo',
-        'IN_PROGRESS': 'in-progress',
-        'IN_PROGRESS': 'in-progress',
-        'REVIEW': 'review',
-        'DONE': 'done'
-      };
-      return statusMap[status?.toUpperCase()] || 'todo';
-    };
-    
-    const normalizedTasks = myTasks.map(task => ({
-      ...task,
-      status: normalizeStatus(task.status)
-    }));
-    
-    
-    res.json({
-      totalTasks: normalizedTasks.length,
-      tasks: normalizedTasks
-    });
-  } catch (error) {
-    console.error("Error fetching my tasks:", error);
-    next(error);
-  }
-};
-
-
-const getUserTasksInTeam = async (req, res, next) => {
+    const tasks = await prisma.projectTask.findMany({ where: { assignedToId: req.user.id, project: { status: 'active' } }, include: { assignedTo: true, project: { select: { id: true, name: true } } }, orderBy: { createdAt: 'desc' } });
+    res.json({ totalTasks: tasks.length, tasks: tasks.map((task) => formatTask(task, task.project)) });
+  } catch (error) { console.error('Error fetching my tasks:', error); next(error); }
+}
+async function getUserTasksInTeam(req, res, next) {
   try {
     const { teamId, userId } = req.params;
     const targetUserId = userId || req.user.id;
-    
-    const team = await Team.findById(teamId);
-    if (!team) {
-      return res.status(404).json({ message: "Team not found" });
-    }
-    
-    const currentUserId = req.user.id.toString();
-    const isMember = team.members.some(m => m.user.toString() === currentUserId);
-    const isOwner = team.owner.toString() === currentUserId;
-    
-    if (!isMember && !isOwner) {
-      return res.status(403).json({ message: "Access denied" });
-    }
-    
-    const projects = await Project.find({ 
-      team: teamId, 
-      status: 'active' 
-    }).select('_id name tasks');
-    
-    const assignedTasks = [];
-    projects.forEach(project => {
-      const userTasks = project.tasks.filter(task => 
-        task.assignedTo && task.assignedTo.toString() === targetUserId
-      );
-      
-      userTasks.forEach(task => {
-        assignedTasks.push({
-          ...task.toObject(),
-          projectId: project._id,
-          projectName: project.name,
-          taskId: task._id
-        });
-      });
-    });
-    
-    res.json({
-      userId: targetUserId,
-      teamId,
-      teamName: team.name,
-      totalTasks: assignedTasks.length,
-      tasks: assignedTasks
-    });
-  } catch (error) {
-    console.error("Error fetching user tasks:", error);
-    next(error);
-  }
-};
-
-module.exports = {
-
-  createProject,
-  getProjectsByTeam,
-  getProjectById,
-  updateProject,
-  deleteProject,
-  getAllProjects,
-
-  addTask,
-  updateTask,
-  deleteTask,
-  updateTaskStatus,
-  getProjectTasks,
-  getTeamTasks,
-  getUserTasksInTeam,
-  getMyTasks  
-};
+    const team = await prisma.team.findUnique({ where: { id: teamId }, include: { members: true } });
+    if (!team) return res.status(404).json({ message: 'Team not found' });
+    if (!canAccessTeam(team, req.user)) return res.status(403).json({ message: 'Access denied' });
+    const projects = await prisma.project.findMany({ where: { teamId, status: 'active' }, include: { tasks: { where: { assignedToId: targetUserId }, include: { assignedTo: true } } } });
+    const tasks = projects.flatMap((project) => project.tasks.map((task) => ({ ...formatTask(task, project), taskId: task.id })));
+    res.json({ userId: targetUserId, teamId, teamName: team.name, totalTasks: tasks.length, tasks });
+  } catch (error) { console.error('Error fetching user tasks:', error); next(error); }
+}
+module.exports = { createProject, getProjectsByTeam, getProjectById, updateProject, deleteProject, getAllProjects, addTask, updateTask, deleteTask, updateTaskStatus, getProjectTasks, getTeamTasks, getUserTasksInTeam, getMyTasks };

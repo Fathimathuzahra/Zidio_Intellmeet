@@ -1,321 +1,140 @@
-const crypto = require("crypto");
-const Team = require("../models/Team");
-const TeamInvitation = require("../models/TeamInvitation");
-const User = require("../models/User");
-const sendEmail = require("../utils/sendEmail");
-const { getRedisClient } = require("../config/redis");
-const { canAccessTeam, canManageTeam } = require("../utils/teamAccess");
-
-// Safe wrapper — no-ops when Redis is not configured
+﻿const crypto = require('crypto');
+const prisma = require('../config/prisma');
+const sendEmail = require('../utils/sendEmail');
+const { getRedisClient } = require('../config/redis');
+const { canAccessTeam, canManageTeam } = require('../utils/teamAccess');
 const cache = {
-  get: async (key) => { const c = getRedisClient(); return c ? c.get(key) : null; },
-  set: async (key, val, opts) => { const c = getRedisClient(); if (c) return c.set(key, val, opts); },
-  del: async (key) => { const c = getRedisClient(); if (c) return c.del(key); },
+  get: async (key) => { const client = getRedisClient(); return client ? client.get(key) : null; },
+  set: async (key, value, options) => { const client = getRedisClient(); if (client) return client.set(key, value, options); },
+  del: async (key) => { const client = getRedisClient(); if (client) return client.del(key); },
 };
-
-
-const getMyTeam = async (req, res) => {
+const teamInclude = { owner: { select: { id: true, name: true, email: true } }, members: { include: { user: { select: { id: true, name: true, email: true, avatarUrl: true } } } } };
+function teamApi(team, populated = true) {
+  if (!team) return team;
+  return { _id: team.id, name: team.name,
+    owner: populated && team.owner ? { _id: team.owner.id, name: team.owner.name, email: team.owner.email } : team.ownerId,
+    members: (team.members || []).map((member) => ({
+      user: populated && member.user ? { _id: member.user.id, name: member.user.name, email: member.user.email, ...(member.user.avatarUrl ? { avatarUrl: member.user.avatarUrl } : {}) } : member.userId,
+      role: member.role,
+    })), createdAt: team.createdAt, updatedAt: team.updatedAt };
+}
+async function getMyTeam(req, res) {
   try {
-    const userId = req.user._id || req.user.id;
-    const cacheKey = `teams:${userId}`;
-
-    const cachedTeams = await cache.get(cacheKey);
-    if (cachedTeams) {
-      return res.status(200).json(JSON.parse(cachedTeams));
-    }
-
-    const teams = await Team.find({
-      $or: [
-        { owner: userId },
-        { "members.user": userId }
-      ]
-    })
-    .populate("owner", "name email")
-    .populate("members.user", "name email");
-
-    await cache.set(cacheKey, JSON.stringify(teams), { EX: 3600 });
-    res.status(200).json(teams);
-  } catch (error) {
-    res.status(500).json({ message: "Error fetching teams", error: error.message });
-  }
-};
-
-const getTeamById = async (req, res, next) => {
+    const userId = req.user.id;
+    const key = `teams:${userId}`;
+    const cached = await cache.get(key);
+    if (cached) return res.status(200).json(JSON.parse(cached));
+    const teams = await prisma.team.findMany({ where: { OR: [{ ownerId: userId }, { members: { some: { userId } } }] }, include: teamInclude });
+    const output = teams.map((team) => teamApi(team));
+    await cache.set(key, JSON.stringify(output), { EX: 3600 });
+    res.status(200).json(output);
+  } catch (error) { res.status(500).json({ message: 'Error fetching teams', error: error.message }); }
+}
+async function getTeamById(req, res, next) {
   try {
     const { teamId } = req.params;
-    const cacheKey = `team:${teamId}`;
-
-    const cachedTeam = await cache.get(cacheKey);
-    if (cachedTeam) {
-      const team = JSON.parse(cachedTeam);
-      if (!canAccessTeam(team, req.user)) {
-        return res.status(403).json({ message: "Access denied" });
-      }
+    const cached = await cache.get(`team:${teamId}`);
+    if (cached) {
+      const team = JSON.parse(cached);
+      if (!canAccessTeam(team, req.user)) return res.status(403).json({ message: 'Access denied' });
       return res.status(200).json(team);
     }
-
-    const team = await Team.findById(teamId)
-      .populate("owner", "name email")
-      .populate("members.user", "name email avatarUrl");
-
-    if (!team) {
-      return res.status(404).json({ message: "Team not found" });
-    }
-
-    if (!canAccessTeam(team, req.user)) {
-      return res.status(403).json({ message: "Access denied" });
-    }
-
-    await cache.set(cacheKey, JSON.stringify(team), { EX: 3600 });
-    res.status(200).json(team);
-  } catch (error) {
-    next(error);
-  }
-};
-
-
-const createTeam = async (req, res, next) => {
+    const team = await prisma.team.findUnique({ where: { id: teamId }, include: teamInclude });
+    if (!team) return res.status(404).json({ message: 'Team not found' });
+    if (!canAccessTeam(team, req.user)) return res.status(403).json({ message: 'Access denied' });
+    const output = teamApi(team);
+    await cache.set(`team:${teamId}`, JSON.stringify(output), { EX: 3600 });
+    res.status(200).json(output);
+  } catch (error) { next(error); }
+}
+async function createTeam(req, res, next) {
   try {
     const { name } = req.body || {};
-    if (!name) {
-      return res.status(400).json({ message: "Team name is required" });
-    }
-
-    const team = await Team.create({
-      name,
-      owner: req.user.id,
-      members: [{ user: req.user.id, role: "admin" }],
-    });
-
-    // Invalidate cache for the user who created the team
-    const cacheKey = `teams:${req.user.id}`;
-    await cache.del(cacheKey);
-
-    return res.status(201).json({ team });
-  } catch (error) {
-    return next(error);
-  }
-};
-
-const inviteToTeam = async (req, res, next) => {
+    if (!name) return res.status(400).json({ message: 'Team name is required' });
+    const team = await prisma.team.create({ data: { name, ownerId: req.user.id, members: { create: { userId: req.user.id, role: 'admin' } } }, include: { members: true } });
+    await cache.del(`teams:${req.user.id}`);
+    res.status(201).json({ team: teamApi(team, false) });
+  } catch (error) { next(error); }
+}
+async function inviteToTeam(req, res, next) {
   try {
     const { teamId } = req.params;
     const rawEmail = req.body?.email;
-    const email = typeof rawEmail === "string" ? rawEmail.trim().toLowerCase() : "";
-
-    if (!email) {
-      return res.status(400).json({ message: "Invite email is required" });
-    }
-
-    const team = await Team.findById(teamId);
-    if (!team) {
-      return res.status(404).json({ message: "Team not found" });
-    }
-
-    if (!canManageTeam(team, req.user)) {
-      return res.status(403).json({ message: "Forbidden" });
-    }
-
-    const existingUser = await User.findOne({ email });
-    const isAlreadyMember = existingUser
-      ? team.members.some(member => member.user.toString() === existingUser._id.toString())
-      : false;
-
-    if (existingUser && team.owner.toString() === existingUser._id.toString()) {
-      return res.status(400).json({ message: "User is already the team owner" });
-    }
-
-    if (isAlreadyMember) {
-      return res.status(400).json({ message: "User is already a member of this team" });
-    }
-
-    const existingInvitation = await TeamInvitation.findOne({ team: teamId, email });
-    if (existingInvitation && existingInvitation.expiresAt > new Date()) {
-      return res.status(400).json({ message: "An active invitation already exists for this email" });
-    }
-
-    const token = crypto.randomBytes(24).toString("hex");
+    const email = typeof rawEmail === 'string' ? rawEmail.trim().toLowerCase() : '';
+    if (!email) return res.status(400).json({ message: 'Invite email is required' });
+    const team = await prisma.team.findUnique({ where: { id: teamId }, include: { members: true } });
+    if (!team) return res.status(404).json({ message: 'Team not found' });
+    if (!canManageTeam(team, req.user)) return res.status(403).json({ message: 'Forbidden' });
+    const user = await prisma.user.findUnique({ where: { email } });
+    if (user && team.ownerId === user.id) return res.status(400).json({ message: 'User is already the team owner' });
+    if (user && team.members.some((m) => m.userId === user.id)) return res.status(400).json({ message: 'User is already a member of this team' });
+    const existing = await prisma.teamInvitation.findFirst({ where: { teamId, email, status: 'pending', expiresAt: { gt: new Date() } } });
+    if (existing) return res.status(400).json({ message: 'An active invitation already exists for this email' });
+    const token = crypto.randomBytes(24).toString('hex');
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-
-    const invitation = await TeamInvitation.create({
-      team: team._id,
-      email,
-      token,
-      invitedBy: req.user.id,
-      expiresAt,
-    });
-
-    const invitationLink = `${process.env.FRONTEND_URL}/teams/invitations/${token}/accept`;
-    
-    const emailHtml = `
-      <div style="font-family: sans-serif; padding: 20px; color: #333;">
-        <h2>You have been invited!</h2>
-        <p>You have been invited to join the team <strong>${team.name}</strong> on IntellMeet.</p>
-        <p>Click the link below to accept the invitation. This link will expire in 7 days.</p>
-        <a href="${invitationLink}" style="background-color: #4F46E5; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block; margin-top: 10px;">
-          Accept Invitation
-        </a>
-      </div>
-    `;
-
+    const invitation = await prisma.teamInvitation.create({ data: { teamId, email, token, invitedById: req.user.id, expiresAt } });
+    const link = `${process.env.FRONTEND_URL}/teams/invitations/${token}/accept`;
     try {
-      await sendEmail({
-        email: invitation.email,
-        subject: `Invitation to join the team ${team.name}`,
-        html: emailHtml,
-      });
+      await sendEmail({ email, subject: `Invitation to join the team ${team.name}`, html: `<div style="font-family:sans-serif;padding:20px;color:#333"><h2>You have been invited!</h2><p>You have been invited to join <strong>${team.name}</strong> on IntellMeet.</p><p>This link expires in 7 days.</p><a href="${link}" style="background:#4F46E5;color:#fff;padding:10px 20px;text-decoration:none;border-radius:5px">Accept Invitation</a></div>` });
     } catch (mailError) {
-      await TeamInvitation.findByIdAndDelete(invitation._id);
-      return res.status(500).json({ message: "Failed to send invitation email", error: mailError.message });
+      await prisma.teamInvitation.delete({ where: { id: invitation.id } });
+      return res.status(500).json({ message: 'Failed to send invitation email', error: mailError.message });
     }
-
-    return res.status(201).json({
-      message: "Invitation sent and email delivered successfully",
-      invitation: {
-        id: invitation._id,
-        teamId: team._id,
-        email: invitation.email,
-        expiresAt: invitation.expiresAt,
-      },
-    });
-  } catch (error) {
-    return next(error);
-  }
-};
-
-const getTeamMembers = async (req, res, next) => {
+    res.status(201).json({ message: 'Invitation sent and email delivered successfully', invitation: { id: invitation.id, teamId, email, expiresAt } });
+  } catch (error) { next(error); }
+}
+async function getTeamMembers(req, res, next) {
   try {
     const { teamId } = req.params;
-
-    const team = await Team.findById(teamId).populate("members.user", "name email avatarUrl");
-
-    if (!team) {
-      return res.status(404).json({ message: "Team not found" });
-    }
-
-    if (!canAccessTeam(team, req.user)) {
-      return res.status(403).json({ message: "Not authorized to see these members" });
-    }
-
-    res.status(200).json(team.members);
-  } catch (error) {
-    next(error);
-  }
-};
-
-const acceptInvitation = async (req, res, next) => {
-  
+    const team = await prisma.team.findUnique({ where: { id: teamId }, include: teamInclude });
+    if (!team) return res.status(404).json({ message: 'Team not found' });
+    if (!canAccessTeam(team, req.user)) return res.status(403).json({ message: 'Not authorized to see these members' });
+    res.status(200).json(teamApi(team).members);
+  } catch (error) { next(error); }
+}
+async function acceptInvitation(req, res, next) {
   try {
     const { token } = req.params;
-    
-    if (!token) {
-      return res.status(400).json({ message: "Token is required" });
-    }
-    
-    const invitation = await TeamInvitation.findOne({ token });
-    
-    if (!invitation) {
-      return res.status(400).json({ message: "Invalid invitation - No matching invitation found" });
-    }
-    
-    
-    if (invitation.status !== "pending") {
-      return res.status(400).json({ message: `Invalid invitation - Status is ${invitation.status}` });
-    }
-    
+    if (!token) return res.status(400).json({ message: 'Token is required' });
+    const invitation = await prisma.teamInvitation.findUnique({ where: { token } });
+    if (!invitation) return res.status(400).json({ message: 'Invalid invitation - No matching invitation found' });
+    if (invitation.status !== 'pending') return res.status(400).json({ message: `Invalid invitation - Status is ${invitation.status}` });
     if (invitation.expiresAt < new Date()) {
-      invitation.status = "expired";
-      await invitation.save();
-      return res.status(400).json({ message: "Invitation expired" });
+      await prisma.teamInvitation.update({ where: { id: invitation.id }, data: { status: 'expired' } });
+      return res.status(400).json({ message: 'Invitation expired' });
     }
-    
-    const team = await Team.findById(invitation.team);
-    if (!team) {
-      return res.status(404).json({ message: "Team not found" });
-    }
-
-    const invitedUser = await User.findById(req.user.id).select("email");
-    if (!invitedUser || invitedUser.email.toLowerCase() !== invitation.email.toLowerCase()) {
-      return res.status(403).json({ message: "This invitation was issued for a different account" });
-    }
-    
-    const alreadyMember = team.members.some(
-      (member) => member.user.toString() === req.user.id
-    );
-    
-    if (!alreadyMember) {
-      team.members.push({ user: req.user.id, role: "member" });
-      await team.save();
-    } else {
-    }
-    
-    invitation.status = "accepted";
-    invitation.acceptedBy = req.user.id;
-    await invitation.save();
-    
-    // Invalidate caches
-    await cache.del(`teams:${req.user.id}`);
-    await cache.del(`team:${invitation.team}`);
-    
-    return res.json({ team, message: "Successfully joined the team" });
-    
-  } catch (error) {
-    console.error("❌ Error in acceptInvitation:", error);
-    return next(error);
-  }
-};
-
-const getJoinedTeams = async (req, res, next) => {
-  try {
-    const userId = req.user.id || req.user._id;
-    const joinedTeams = await Team.find({
-      $or: [
-        { "members.user": userId },
-        { owner: userId }
-      ]
-    })
-    .populate("owner", "name email")
-    .populate("members.user", "name email");
-
-    return res.status(200).json(joinedTeams);
-  } catch (error) {
-    return res.status(500).json({ 
-      message: "Error fetching joined teams", 
-      error: error.message 
+    const team = await prisma.team.findUnique({ where: { id: invitation.teamId }, include: { members: true } });
+    if (!team) return res.status(404).json({ message: 'Team not found' });
+    const user = await prisma.user.findUnique({ where: { id: req.user.id }, select: { id: true, email: true } });
+    if (!user || user.email.toLowerCase() !== invitation.email.toLowerCase()) return res.status(403).json({ message: 'This invitation was issued for a different account' });
+    await prisma.$transaction(async (tx) => {
+      await tx.teamMember.upsert({ where: { teamId_userId: { teamId: team.id, userId: user.id } }, create: { teamId: team.id, userId: user.id, role: 'member' }, update: {} });
+      await tx.teamInvitation.update({ where: { id: invitation.id }, data: { status: 'accepted', acceptedById: user.id } });
     });
-  }
-};
-
-const removeMember = async (req, res, next) => {
+    await cache.del(`teams:${user.id}`);
+    await cache.del(`team:${team.id}`);
+    const populated = await prisma.team.findUnique({ where: { id: team.id }, include: teamInclude });
+    res.json({ team: teamApi(populated, false), message: 'Successfully joined the team' });
+  } catch (error) { console.error('Error in acceptInvitation:', error); next(error); }
+}
+async function getJoinedTeams(req, res, next) {
+  try {
+    const userId = req.user.id;
+    const teams = await prisma.team.findMany({ where: { OR: [{ members: { some: { userId } } }, { ownerId: userId }] }, include: teamInclude });
+    res.status(200).json(teams.map((team) => teamApi(team)));
+  } catch (error) { res.status(500).json({ message: 'Error fetching joined teams', error: error.message }); }
+}
+async function removeMember(req, res, next) {
   try {
     const { teamId, userId } = req.params;
-    const team = await Team.findById(teamId);
-    if (!team) return res.status(404).json({ message: "Team not found" });
-
-    const isOwner = team.owner.toString() === req.user.id;
-    if (!isOwner) return res.status(403).json({ message: "Only the team owner can remove members" });
-
-    if (userId === req.user.id) return res.status(400).json({ message: "Cannot remove yourself" });
-
-    team.members = team.members.filter(m => m.user.toString() !== userId);
-    await team.save();
-
+    const team = await prisma.team.findUnique({ where: { id: teamId } });
+    if (!team) return res.status(404).json({ message: 'Team not found' });
+    if (team.ownerId !== req.user.id) return res.status(403).json({ message: 'Only the team owner can remove members' });
+    if (userId === req.user.id) return res.status(400).json({ message: 'Cannot remove yourself' });
+    await prisma.teamMember.deleteMany({ where: { teamId, userId } });
     await cache.del(`teams:${req.user.id}`);
     await cache.del(`team:${teamId}`);
-
-    return res.json({ message: "Member removed successfully" });
-  } catch (error) {
-    return next(error);
-  }
-};
-
-module.exports = {
-  createTeam,
-  inviteToTeam,
-  acceptInvitation,
-  getMyTeam,
-  getTeamById,
-  getTeamMembers,
-  getJoinedTeams,
-  removeMember,
-};
+    res.json({ message: 'Member removed successfully' });
+  } catch (error) { next(error); }
+}
+module.exports = { createTeam, inviteToTeam, acceptInvitation, getMyTeam, getTeamById, getTeamMembers, getJoinedTeams, removeMember };

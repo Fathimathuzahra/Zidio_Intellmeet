@@ -1,0 +1,228 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  admin
+  member
+}
+
+enum TeamRole {
+  admin
+  member
+}
+
+enum InvitationStatus {
+  pending
+  accepted
+  expired
+}
+
+enum MeetingStatus {
+  scheduled
+  active
+  ended
+}
+
+enum ActionItemStatus {
+  todo
+  in_progress
+  done
+}
+
+enum Priority {
+  Critical
+  High
+  Medium
+  Low
+}
+
+enum ProjectStatus {
+  active
+  archived
+  completed
+}
+
+enum ProjectTaskStatus {
+  todo
+  in_progress
+  review
+  done
+}
+
+enum NotificationType {
+  meeting
+  task
+  invitation
+  general
+}
+
+model User {
+  id                    String               @id @default(cuid())
+  name                  String               @default("")
+  email                 String               @unique
+  password              String?
+  role                  UserRole             @default(member)
+  avatarUrl             String?
+  bio                   String?              @db.VarChar(500)
+  oauthProvider         String?
+  oauthId               String?
+  resetPasswordToken    String?              @unique
+  resetPasswordExpires  DateTime?
+  tokenVersion          Int                  @default(0)
+  createdAt             DateTime             @default(now())
+  updatedAt             DateTime             @updatedAt
+  ownedTeams            Team[]               @relation("TeamOwner")
+  memberships           TeamMember[]
+  sentInvitations       TeamInvitation[]     @relation("InvitationSender")
+  acceptedInvitations   TeamInvitation[]     @relation("InvitationAccepter")
+  hostedMeetings        Meeting[]            @relation("MeetingHost")
+  meetingParticipations MeetingParticipant[]
+  createdProjects       Project[]            @relation("ProjectCreator")
+  assignedTasks         ProjectTask[]
+  notifications         Notification[]
+}
+
+model Team {
+  id          String           @id @default(cuid())
+  name        String
+  ownerId     String
+  owner       User             @relation("TeamOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  members     TeamMember[]
+  invitations TeamInvitation[]
+  meetings    Meeting[]
+  projects    Project[]
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+}
+
+model TeamMember {
+  id        String   @id @default(cuid())
+  teamId    String
+  userId    String
+  role      TeamRole @default(member)
+  team      Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([teamId, userId])
+  @@index([userId])
+}
+
+model TeamInvitation {
+  id           String           @id @default(cuid())
+  teamId       String
+  team         Team             @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  email        String
+  token        String           @unique
+  status       InvitationStatus @default(pending)
+  invitedById  String
+  invitedBy    User             @relation("InvitationSender", fields: [invitedById], references: [id], onDelete: Cascade)
+  acceptedById String?
+  acceptedBy   User?            @relation("InvitationAccepter", fields: [acceptedById], references: [id], onDelete: SetNull)
+  expiresAt    DateTime
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  @@index([teamId, email, status])
+}
+
+model Meeting {
+  id           String               @id @default(cuid())
+  roomId       String               @unique
+  title        String
+  hostId       String
+  host         User                 @relation("MeetingHost", fields: [hostId], references: [id], onDelete: Cascade)
+  teamId       String?
+  team         Team?                @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  scheduledAt  DateTime?
+  status       MeetingStatus        @default(active)
+  participants MeetingParticipant[]
+  actionItems  ActionItem[]
+  summary      String?
+  transcript   String?
+  startedAt    DateTime             @default(now())
+  endedAt      DateTime?
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+
+  @@index([hostId, createdAt])
+  @@index([teamId, createdAt])
+}
+
+model MeetingParticipant {
+  id        String    @id @default(cuid())
+  meetingId String
+  meeting   Meeting   @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  userId    String?
+  user      User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  joinedAt  DateTime  @default(now())
+  leftAt    DateTime?
+
+  @@index([userId])
+}
+
+model ActionItem {
+  id        String           @id @default(cuid())
+  meetingId String
+  meeting   Meeting          @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  text      String
+  assignee  String           @default("")
+  completed Boolean          @default(false)
+  status    ActionItemStatus @default(todo)
+  priority  Priority         @default(Medium)
+  createdAt DateTime         @default(now())
+}
+
+model Project {
+  id          String        @id @default(cuid())
+  name        String
+  description String        @default("")
+  teamId      String?
+  team        Team?         @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  createdById String
+  createdBy   User          @relation("ProjectCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  tasks       ProjectTask[]
+  status      ProjectStatus @default(active)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@index([teamId, status, createdAt])
+}
+
+model ProjectTask {
+  id           String            @id @default(cuid())
+  projectId    String
+  project      Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  title        String
+  description  String            @default("")
+  status       ProjectTaskStatus @default(todo)
+  assignedToId String?
+  assignedTo   User?             @relation(fields: [assignedToId], references: [id], onDelete: SetNull)
+  dueDate      DateTime?
+  priority     Priority          @default(Medium)
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  @@index([projectId, createdAt])
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  message   String
+  type      NotificationType @default(general)
+  isRead    Boolean          @default(false)
+  link      String?
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  @@index([userId, createdAt])
+}

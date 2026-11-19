@@ -10,9 +10,7 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
-      - key: USE_IN_MEMORY_DB
-        value: "false"
-      - key: MONGO_URI
+      - key: DATABASE_URL
         sync: false
       - key: JWT_ACCESS_SECRET
         generateValue: true

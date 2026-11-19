@@ -2,8 +2,8 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const { configureAuthSecrets } = require('../config/authSecrets');
 
-test('local demo mode generates distinct strong process-only JWT secrets', () => {
-  const env = { NODE_ENV: 'development', USE_IN_MEMORY_DB: 'true' };
+test('local development generates distinct strong process-only JWT secrets', () => {
+  const env = { NODE_ENV: 'development' };
   configureAuthSecrets(env);
 
   assert.equal(env.JWT_ACCESS_SECRET.length, 64);

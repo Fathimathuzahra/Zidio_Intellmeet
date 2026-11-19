@@ -1,304 +1,154 @@
-const Meeting = require('../models/Meeting');
-const Team = require('../models/Team');
+﻿const prisma = require('../config/prisma');
 const sendMeetingEmail = require('../utils/sendMeetingEmail');
 const { canAccessMeeting } = require('../utils/meetingAccess');
 
-function generateRoomId() {
-  return Math.random().toString(36).substring(2, 10).toUpperCase();
+const meetingIncludes = { host: { select: { id: true, name: true, email: true } }, team: { select: { id: true, name: true } }, participants: { include: { user: { select: { id: true, name: true, email: true } } } }, actionItems: true };
+const toUser = (user) => user ? { _id: user.id, name: user.name, email: user.email } : user;
+function meetingApi(meeting) {
+  if (!meeting) return meeting;
+  return {
+    _id: meeting.id, roomId: meeting.roomId, title: meeting.title,
+    host: meeting.host ? toUser(meeting.host) : meeting.hostId,
+    team: meeting.team ? { _id: meeting.team.id, name: meeting.team.name } : meeting.teamId,
+    scheduledAt: meeting.scheduledAt, status: meeting.status,
+    participants: (meeting.participants || []).map((p) => ({
+      _id: p.id, userId: p.user ? toUser(p.user) : p.userId, joinedAt: p.joinedAt, leftAt: p.leftAt,
+    })),
+    actionItems: (meeting.actionItems || []).map((item) => ({
+      _id: item.id, text: item.text, assignee: item.assignee, completed: item.completed,
+      status: item.status, priority: item.priority, createdAt: item.createdAt,
+    })),
+    summary: meeting.summary, transcript: meeting.transcript, startedAt: meeting.startedAt,
+    endedAt: meeting.endedAt, createdAt: meeting.createdAt, updatedAt: meeting.updatedAt,
+  };
 }
-
+function generateRoomId() { return Math.random().toString(36).substring(2, 10).toUpperCase(); }
 async function notifyTeamMembers(meeting, team, host, isScheduled) {
-  const User = require('../models/User');
-  const memberIds = team.members.map(member => member.user);
-  const members = await User.find({ _id: { $in: memberIds } });
-
-  await Promise.all(members.map(member =>
-    sendMeetingEmail({
-      to: member.email,
-      userName: member.name,
-      meetingTitle: meeting.title,
-      meetingTime: meeting.scheduledAt || meeting.createdAt,
-      roomId: meeting.roomId,
-      hostName: host.name,
-      isScheduled,
-    })
-  ));
+  const members = await prisma.user.findMany({ where: { memberships: { some: { teamId: team.id } } }, select: { name: true, email: true } });
+  await Promise.all(members.map((member) => sendMeetingEmail({
+    to: member.email, userName: member.name, meetingTitle: meeting.title,
+    meetingTime: meeting.scheduledAt || meeting.createdAt, roomId: meeting.roomId,
+    hostName: host.name, isScheduled,
+  })));
 }
-
-const getMeetings = async (req, res) => {
+async function getMeetings(req, res) {
   try {
     const userId = req.user.id;
-
-    const userTeams = await Team.find({
-      $or: [{ owner: userId }, { 'members.user': userId }],
-    }).select('_id');
-    const teamIds = userTeams.map(t => t._id);
-
-    const meetings = await Meeting.find({
-      $or: [
-        { host: userId },
-        { 'participants.userId': userId },
-        { team: { $in: teamIds } },
-      ],
-    })
-      .sort({ createdAt: -1 })
-      .populate('host', 'name email')
-      .populate('participants.userId', 'name email')
-      .populate('team', 'name');
-
-    res.json(meetings);
-  } catch (error) {
-    console.error('Error fetching meetings:', error);
-    res.status(500).json({ message: 'Server error' });
-  }
-};
-
-const getMeeting = async (req, res) => {
+    const teams = await prisma.team.findMany({ where: { OR: [{ ownerId: userId }, { members: { some: { userId } } }] }, select: { id: true } });
+    const meetings = await prisma.meeting.findMany({ where: { OR: [
+      { hostId: userId }, { participants: { some: { userId } } }, { teamId: { in: teams.map((t) => t.id) } },
+    ] }, orderBy: { createdAt: 'desc' }, include: meetingIncludes });
+    res.json(meetings.map(meetingApi));
+  } catch (error) { console.error('Error fetching meetings:', error); res.status(500).json({ message: 'Server error' }); }
+}
+async function getMeeting(req, res) {
   try {
-    const meeting = await Meeting.findById(req.params.id);
+    const meeting = await prisma.meeting.findUnique({ where: { id: req.params.id }, include: meetingIncludes });
     if (!meeting) return res.status(404).json({ message: 'Meeting not found' });
-    if (!(await canAccessMeeting(meeting, req.user.id))) {
-      return res.status(403).json({ message: 'You cannot access this meeting' });
-    }
-
-    await meeting.populate('host', 'name email');
-    await meeting.populate('participants.userId', 'name email');
-    res.json(meeting);
-  } catch (error) {
-    console.error('Error fetching meeting:', error);
-    res.status(500).json({ message: 'Server error' });
-  }
-};
-
-const createMeeting = async (req, res) => {
+    if (!(await canAccessMeeting(meeting, req.user.id))) return res.status(403).json({ message: 'You cannot access this meeting' });
+    res.json(meetingApi(meeting));
+  } catch (error) { console.error('Error fetching meeting:', error); res.status(500).json({ message: 'Server error' }); }
+}
+async function createMeeting(req, res) {
   try {
     const { title, scheduledAt, teamId } = req.body;
-
     let team = null;
     if (teamId) {
-      team = await Team.findById(teamId);
+      team = await prisma.team.findUnique({ where: { id: teamId }, include: { members: true } });
       if (!team) return res.status(404).json({ message: 'Team not found' });
-
-      const isMember = team.members.some(m => m.user.toString() === req.user.id);
-      if (!isMember && team.owner.toString() !== req.user.id) {
-        return res.status(403).json({ message: 'You are not a member of this team' });
-      }
+      const isMember = team.members.some((m) => m.userId === req.user.id);
+      if (!isMember && team.ownerId !== req.user.id) return res.status(403).json({ message: 'You are not a member of this team' });
     }
-
-    const meeting = new Meeting({
-      title,
-      roomId: generateRoomId(),
-      host: req.user.id,
-      team: teamId || null,
-      scheduledAt: scheduledAt || null,
+    let roomId = generateRoomId();
+    while (await prisma.meeting.findUnique({ where: { roomId }, select: { id: true } })) roomId = generateRoomId();
+    const created = await prisma.meeting.create({ data: {
+      title, roomId, hostId: req.user.id, teamId: teamId || null,
+      scheduledAt: scheduledAt ? new Date(scheduledAt) : null,
       status: scheduledAt && new Date(scheduledAt) > new Date() ? 'scheduled' : 'active',
-      participants: [{ userId: req.user.id, joinedAt: new Date() }],
-    });
-
-    await meeting.save();
-
-    const populatedMeeting = await Meeting.findById(meeting._id)
-      .populate('host', 'name email')
-      .populate('team');
-
-    if (team && team.members.length > 0) {
-      // Invitation delivery must never make a successfully-created meeting fail.
-      // SMTP is optional for local demos and can be retried independently.
-      notifyTeamMembers(populatedMeeting, team, populatedMeeting.host, meeting.status === 'scheduled')
-        .catch((notificationError) => console.warn('Meeting invitation delivery failed:', notificationError.message));
-    }
-
-    res.status(201).json(populatedMeeting);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'Server error' });
-  }
-};
-
-const startMeeting = async (req, res) => {
+      participants: { create: { userId: req.user.id } },
+    } });
+    const populated = await prisma.meeting.findUnique({ where: { id: created.id }, include: meetingIncludes });
+    if (team && team.members.length) notifyTeamMembers(populated, team, populated.host, populated.status === 'scheduled')
+      .catch((e) => console.warn('Meeting invitation delivery failed:', e.message));
+    res.status(201).json(meetingApi(populated));
+  } catch (error) { console.error(error); res.status(500).json({ message: 'Server error' }); }
+}
+async function startMeeting(req, res) {
   try {
-    const meeting = await Meeting.findById(req.params.id)
-      .populate('host', 'name email')
-      .populate('team');
-
-    if (!meeting) return res.status(404).json({ message: 'Meeting not found' });
-
-    if (meeting.host._id.toString() !== req.user.id) {
-      return res.status(403).json({ message: 'Only the host can start the meeting' });
-    }
-
-    meeting.status = 'active';
-    meeting.startedAt = new Date();
-    await meeting.save();
-
-    if (meeting.team && meeting.team.members) {
-      notifyTeamMembers(meeting, meeting.team, meeting.host, false)
-        .catch((notificationError) => console.warn('Meeting start notification failed:', notificationError.message));
-    }
-
-    res.json({ meeting });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'Server error' });
-  }
-};
-
-const endMeeting = async (req, res) => {
+    const existing = await prisma.meeting.findUnique({ where: { id: req.params.id }, include: { host: true, team: { include: { members: true } } } });
+    if (!existing) return res.status(404).json({ message: 'Meeting not found' });
+    if (existing.hostId !== req.user.id) return res.status(403).json({ message: 'Only the host can start the meeting' });
+    const meeting = await prisma.meeting.update({ where: { id: existing.id }, data: { status: 'active', startedAt: new Date() }, include: meetingIncludes });
+    if (existing.team) notifyTeamMembers(meeting, existing.team, meeting.host, false).catch((e) => console.warn('Meeting start notification failed:', e.message));
+    res.json({ meeting: meetingApi(meeting) });
+  } catch (error) { console.error(error); res.status(500).json({ message: 'Server error' }); }
+}
+async function endMeeting(req, res) {
   try {
-    const { transcript } = req.body;
-    const meeting = await Meeting.findById(req.params.id);
-
-    if (!meeting) return res.status(404).json({ message: 'Meeting not found' });
-    if (meeting.host.toString() !== req.user.id) {
-      return res.status(403).json({ message: 'Only the meeting host can end this meeting' });
-    }
-
-    meeting.status = 'ended';
-    meeting.endedAt = new Date();
-    if (transcript) meeting.transcript = transcript;
-
-    await meeting.save();
-    res.json({ meeting });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'Server error' });
-  }
-};
-
-const saveSummary = async (req, res) => {
+    const existing = await prisma.meeting.findUnique({ where: { id: req.params.id } });
+    if (!existing) return res.status(404).json({ message: 'Meeting not found' });
+    if (existing.hostId !== req.user.id) return res.status(403).json({ message: 'Only the meeting host can end this meeting' });
+    const data = { status: 'ended', endedAt: new Date() };
+    if (req.body?.transcript) data.transcript = req.body.transcript;
+    const meeting = await prisma.meeting.update({ where: { id: existing.id }, data, include: meetingIncludes });
+    res.json({ meeting: meetingApi(meeting) });
+  } catch (error) { console.error(error); res.status(500).json({ message: 'Server error' }); }
+}
+async function saveSummary(req, res) {
   try {
-    const { summary, actionItems } = req.body;
-    const meeting = await Meeting.findById(req.params.id);
-    if (!meeting) return res.status(404).json({ message: 'Meeting not found' });
-    if (!(await canAccessMeeting(meeting, req.user.id))) {
-      return res.status(403).json({ message: 'You cannot update this meeting' });
+    const existing = await prisma.meeting.findUnique({ where: { id: req.params.id } });
+    if (!existing) return res.status(404).json({ message: 'Meeting not found' });
+    if (!(await canAccessMeeting(existing, req.user.id))) return res.status(403).json({ message: 'You cannot update this meeting' });
+    const data = { summary: req.body.summary };
+    if (Array.isArray(req.body.actionItems)) {
+      const statusMap = { todo: 'todo', 'in-progress': 'in_progress', done: 'done' };
+      data.actionItems = { deleteMany: {}, create: req.body.actionItems.map((item) => ({
+        text: item.text, assignee: item.assignee || '', completed: Boolean(item.completed), status: statusMap[item.status?.toLowerCase()] || 'todo',
+      })) };
     }
-
-    meeting.summary = summary;
-    if (Array.isArray(actionItems)) {
-      const statusMap = {
-        'todo': 'todo',
-        'in-progress': 'in_progress',
-        'done': 'done'
-      };
-      meeting.actionItems = actionItems.map(item => ({
-        text: item.text,
-        assignee: item.assignee || '',
-        completed: item.completed || false, // Preserve completed status if present
-        status: statusMap[item.status?.toLowerCase()] || 'todo', // Map status
-      }));
-    }
-    await meeting.save();
-    res.json({ meeting });
-  } catch (error) {
-    console.error('Error saving meeting summary:', error);
-    res.status(500).json({ message: 'Server error' });
-  }
-};
-
-const toggleActionItem = async (req, res) => {
+    const meeting = await prisma.meeting.update({ where: { id: existing.id }, data, include: meetingIncludes });
+    res.json({ meeting: meetingApi(meeting) });
+  } catch (error) { console.error('Error saving meeting summary:', error); res.status(500).json({ message: 'Server error' }); }
+}
+async function toggleActionItem(req, res) {
   try {
-    const { id, itemId } = req.params;
-    const meeting = await Meeting.findById(id);
+    const meeting = await prisma.meeting.findUnique({ where: { id: req.params.id }, include: { actionItems: true } });
     if (!meeting) return res.status(404).json({ message: 'Meeting not found' });
-    if (!(await canAccessMeeting(meeting, req.user.id))) {
-      return res.status(403).json({ message: 'You cannot update this meeting' });
-    }
-
-    const item = meeting.actionItems.id(itemId);
+    if (!(await canAccessMeeting(meeting, req.user.id))) return res.status(403).json({ message: 'You cannot update this meeting' });
+    const item = meeting.actionItems.find((action) => action.id === req.params.itemId);
     if (!item) return res.status(404).json({ message: 'Action item not found' });
-
-    item.completed = !item.completed;
-    item.status = item.completed ? 'done' : 'todo';
-    await meeting.save();
-    res.json({ meeting });
-  } catch (error) {
-    console.error('Error updating meeting action item:', error);
-    res.status(500).json({ message: 'Server error' });
-  }
-};
-
-const getAnalytics = async (req, res) => {
+    await prisma.actionItem.update({ where: { id: item.id }, data: { completed: !item.completed, status: item.completed ? 'todo' : 'done' } });
+    const updated = await prisma.meeting.findUnique({ where: { id: meeting.id }, include: meetingIncludes });
+    res.json({ meeting: meetingApi(updated) });
+  } catch (error) { console.error('Error updating meeting action item:', error); res.status(500).json({ message: 'Server error' }); }
+}
+async function getAnalytics(req, res) {
   try {
     const userId = req.user.id;
-
-    const userTeams = await Team.find({
-      $or: [{ owner: userId }, { 'members.user': userId }],
-    }).select('_id');
-    const teamIds = userTeams.map(t => t._id);
-
-    const meetings = await Meeting.find({
-      $or: [
-        { host: userId },
-        { 'participants.userId': userId },
-        { team: { $in: teamIds } },
-      ],
-    });
-
+    const teams = await prisma.team.findMany({ where: { OR: [{ ownerId: userId }, { members: { some: { userId } } }] }, select: { id: true } });
+    const meetings = await prisma.meeting.findMany({ where: { OR: [
+      { hostId: userId }, { participants: { some: { userId } } }, { teamId: { in: teams.map((t) => t.id) } },
+    ] }, include: { actionItems: true } });
     const total = meetings.length;
-    const ended = meetings.filter(m => m.status === 'ended').length;
-    const active = meetings.filter(m => m.status === 'active').length;
-    const scheduled = meetings.filter(m => m.status === 'scheduled').length;
-    const aiGeneratedSummaries = meetings.filter(m => m.summary).length;
-
-    const allActionItems = meetings.flatMap(m => m.actionItems);
-    const totalActionItems = allActionItems.length;
-    const completedActionItems = allActionItems.filter(i => i.completed).length;
-
-    const endedWithDuration = meetings.filter(m => m.startedAt && m.endedAt);
-    const averageDurationMinutes = endedWithDuration.length
-      ? Math.round(
-          endedWithDuration.reduce(
-            (sum, m) => sum + (new Date(m.endedAt) - new Date(m.startedAt)) / 60000,
-            0,
-          ) / endedWithDuration.length,
-        )
-      : 0;
-
-    const recentMeetings = meetings
-      .filter(m => m.status === 'ended')
-      .sort((a, b) => new Date(b.endedAt) - new Date(a.endedAt))
-      .slice(0, 10);
-
-    res.json({
-      total,
-      ended,
-      active,
-      scheduled,
-      totalActionItems,
-      completedActionItems,
-      averageDurationMinutes,
-      aiGeneratedSummaries,
-      recentMeetings,
-    });
-  } catch (error) {
-    console.error('Analytics error:', error);
-    res.status(500).json({ message: 'Server error' });
-  }
-};
-
-const deleteMeeting = async (req, res) => {
+    const ended = meetings.filter((m) => m.status === 'ended').length;
+    const active = meetings.filter((m) => m.status === 'active').length;
+    const scheduled = meetings.filter((m) => m.status === 'scheduled').length;
+    const items = meetings.flatMap((m) => m.actionItems);
+    const durations = meetings.filter((m) => m.startedAt && m.endedAt);
+    const recent = meetings.filter((m) => m.status === 'ended').sort((a, b) => b.endedAt - a.endedAt).slice(0, 10).map(meetingApi);
+    res.json({ total, ended, active, scheduled, totalActionItems: items.length,
+      completedActionItems: items.filter((i) => i.completed).length,
+      averageDurationMinutes: durations.length ? Math.round(durations.reduce((sum, m) => sum + (m.endedAt - m.startedAt) / 60000, 0) / durations.length) : 0,
+      aiGeneratedSummaries: meetings.filter((m) => m.summary).length, recentMeetings: recent });
+  } catch (error) { console.error('Analytics error:', error); res.status(500).json({ message: 'Server error' }); }
+}
+async function deleteMeeting(req, res) {
   try {
-    const meeting = await Meeting.findById(req.params.id);
+    const meeting = await prisma.meeting.findUnique({ where: { id: req.params.id }, select: { id: true, hostId: true } });
     if (!meeting) return res.status(404).json({ message: 'Meeting not found' });
-    if (meeting.host.toString() !== req.user.id) {
-      return res.status(403).json({ message: 'Only the host can delete this meeting' });
-    }
-    await meeting.deleteOne();
+    if (meeting.hostId !== req.user.id) return res.status(403).json({ message: 'Only the host can delete this meeting' });
+    await prisma.meeting.delete({ where: { id: meeting.id } });
     res.json({ message: 'Meeting deleted' });
-  } catch (error) {
-    res.status(500).json({ message: 'Server error' });
-  }
-};
-
-module.exports = {
-  getMeetings,
-  getMeeting,
-  createMeeting,
-  startMeeting,
-  endMeeting,
-  saveSummary,
-  toggleActionItem,
-  getAnalytics,
-  deleteMeeting,
-};
+  } catch (error) { res.status(500).json({ message: 'Server error' }); }
+}
+module.exports = { getMeetings, getMeeting, createMeeting, startMeeting, endMeeting, saveSummary, toggleActionItem, getAnalytics, deleteMeeting };

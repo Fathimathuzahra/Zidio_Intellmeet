@@ -1,6 +1,6 @@
 ﻿# IntellMeet - AI-Powered Enterprise Meeting & Collaboration Platform
 
-MERN application for real-time meetings, AI summaries, smart action items, team collaboration, and productivity analytics.
+React and Express application for real-time meetings, AI summaries, smart action items, team collaboration, and productivity analytics.
 
 ## Business Value Targets
 
@@ -33,7 +33,7 @@ These are design goals, not measured guarantees from this repository. Validate t
 | UI Components | Radix primitives + Tailwind CSS 3 | Modern, accessible, customizable |
 | State Management | TanStack Query + Zustand | Server-state + lightweight client-state |
 | Backend | Node.js + Express | Lightweight, fast, scalable |
-| Database | MongoDB (with Mongoose) | Flexible schema for meetings and tasks |
+| Database | PostgreSQL + Prisma | Relational persistence with schema-managed migrations |
 | Real-Time | Socket.io + WebRTC | Bidirectional real-time communication + video |
 | AI Integration | OpenAI Chat Completions (optional) | Structured meeting summaries and action item extraction |
 | Cache | Optional Redis connection | Redis can be enabled as infrastructure; application caching is not currently wired |
@@ -52,7 +52,7 @@ IntellMeet/
     config/          # Database, Redis, authentication secrets, and Passport
     controllers/     # Auth, users, meetings, teams, projects, notifications, and AI
     middleware/      # Authentication and error handling
-    models/          # Mongoose data models
+    prisma/          # Prisma schema and PostgreSQL migrations
     routes/          # Express API routes
     sockets/         # Socket.IO meeting rooms and WebRTC signaling
     tests/           # Auth, AI, meeting-access, controller, and socket tests
@@ -78,7 +78,7 @@ IntellMeet/
 ### Prerequisites
 
 - Node.js >= 20.19 (required by Vite 8)
-- MongoDB (or use in-memory mode for demo)
+- PostgreSQL 15+
 - Redis is optional; the application runs without it
 
 ### Backend
@@ -87,7 +87,8 @@ IntellMeet/
 cd backend
 npm install
 cp .env.example .env
-# Edit .env with your configuration
+# Edit .env with your DATABASE_URL and other configuration
+npm run db:deploy
 npm run dev
 ```
 
@@ -99,15 +100,14 @@ Backend runs on `http://localhost:5000`.
 cd frontend
 npm install
 cp .env.example .env
-# Edit .env with your configuration
+# Edit .env with frontend API and Socket.IO URLs
 npm run dev
 ```
 
 Frontend runs on `http://127.0.0.1:5173`.
 
-For a local demo without a MongoDB service, set `USE_IN_MEMORY_DB=true` in the backend environment. Demo data is ephemeral and resets when the backend stops.
-When both JWT secrets are left blank in this demo mode, the backend generates separate random secrets in memory; accounts and sessions reset when it restarts. For normal local or production deployments, configure two different random secrets of at least 32 characters.
-To use the seeded demo accounts in in-memory mode, run `npm run seed:demo` from a second backend terminal after the API is running. The seeder connects to the active in-memory database; it no longer reports success for a temporary database that would immediately disappear.
+During local development, missing JWT secrets are generated in process memory; sessions expire when the API restarts. Configure two different random secrets of at least 32 characters for production.
+Run `npm run seed:demo` to create the local demo accounts after the schema is deployed.
 
 ### Vercel frontend deployment
 
@@ -118,13 +118,13 @@ VITE_API_URL=https://<your-render-service>.onrender.com/api
 VITE_SOCKET_URL=https://<your-render-service>.onrender.com
 ```
 
-The API and Socket.IO signaling server must run on a persistent Node.js host; Vercel serverless functions cannot maintain the app's Socket.IO service. This repository includes a Render Blueprint in `render.yaml`. Create a MongoDB Atlas database, then deploy the backend from the repository using that Blueprint. Set `MONGO_URI` to the Atlas connection string and set both `FRONTEND_URL` and `CORS_ORIGIN` to the exact Vercel origin (for example, `https://your-project.vercel.app`, with no trailing slash). The Blueprint generates distinct JWT secrets. After Render deploys, use its service URL for `VITE_API_URL` and `VITE_SOCKET_URL` in Vercel, then redeploy the frontend.
+The API and Socket.IO signaling server must run on a persistent Node.js host; Vercel serverless functions cannot maintain the app's Socket.IO service. This repository includes a Render Blueprint in `render.yaml`. Provision PostgreSQL, then deploy the backend from the repository using that Blueprint. Set `DATABASE_URL` to the PostgreSQL connection string and set both `FRONTEND_URL` and `CORS_ORIGIN` to the exact Vercel origin (for example, `https://your-project.vercel.app`, with no trailing slash). The Blueprint generates distinct JWT secrets. After Render deploys, use its service URL for `VITE_API_URL` and `VITE_SOCKET_URL` in Vercel, then redeploy the frontend.
 
 Deployment order:
 
-1. Create a MongoDB Atlas database and allow connections from the backend host. Use a dedicated database user; do not commit its URI.
+1. Provision PostgreSQL and set `DATABASE_URL` in the backend host; do not commit connection strings.
 2. Create the Vercel project with `frontend/` as its root directory. Deploy once to obtain its HTTPS origin; the API URL can be added after the backend exists.
-3. Create a Render Blueprint from the repository using `render.yaml`. Supply the Atlas URI and the Vercel origin for `FRONTEND_URL` and `CORS_ORIGIN`.
+3. Create a Render Blueprint from the repository using `render.yaml`. Supply the PostgreSQL URL and the Vercel origin for `FRONTEND_URL` and `CORS_ORIGIN`.
 4. Add the Render service URL to the two Vercel variables above and redeploy.
 5. Verify `/api/health`, registration/login, refresh-token behavior, and a multi-browser meeting. Configure a hosted TURN service for networks where direct WebRTC connectivity fails.
 
@@ -137,8 +137,7 @@ The Render Blueprint uses the free instance plan to avoid unexpected charges; fr
 ```env
 NODE_ENV=development
 PORT=5000
-MONGO_URI=mongodb://127.0.0.1:27017/intellmeet
-USE_IN_MEMORY_DB=false
+DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/intellmeet?schema=public
 JWT_ACCESS_SECRET=intellmeet-local-development-only-access-secret-change-before-deploy
 JWT_REFRESH_SECRET=intellmeet-local-development-only-refresh-secret-change-before-deploy
 FRONTEND_URL=http://localhost:5173
@@ -214,7 +213,7 @@ For Render, use the repository's `render.yaml` Blueprint. For other persistent N
 - Build command: `npm install`
 - Start command: `npm start`
 - Health check path: `/api/health`
-- Required production env vars: `NODE_ENV=production`, `MONGO_URI`, `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, `FRONTEND_URL`, `CORS_ORIGIN`
+- Required production env vars: `NODE_ENV=production`, `DATABASE_URL`, `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, `FRONTEND_URL`, `CORS_ORIGIN`
 - Set `FRONTEND_URL` and `CORS_ORIGIN` to the exact HTTPS frontend origin. Keep the two JWT secrets distinct and at least 32 characters long.
 
 ### Frontend

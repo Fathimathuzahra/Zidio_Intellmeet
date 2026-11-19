@@ -1,6 +1,5 @@
-const crypto = require("node:crypto");
-const Meeting = require("../models/Meeting");
-const User = require("../models/User");
+﻿const crypto = require("node:crypto");
+const prisma = require("../config/prisma");
 const { canAccessMeeting } = require("../utils/meetingAccess");
 
 const activeRooms = {};
@@ -17,8 +16,8 @@ async function verifyRoomHost(socket, roomId) {
   }
 
   try {
-    const meeting = await Meeting.findOne({ roomId }).select("host");
-    return Boolean(meeting && String(meeting.host) === socket.data.user.id);
+    const meeting = await prisma.meeting.findUnique({ where: { roomId }, select: { hostId: true } });
+    return Boolean(meeting && String(meeting.hostId) === socket.data.user.id);
   } catch (error) {
     console.error("Could not verify meeting host:", error.message);
     return null;
@@ -43,8 +42,8 @@ const initMeetingSockets = (io) => {
 
       if (!isGuest && socket.data.user?.id === userId) {
         try {
-          meeting = await Meeting.findOne({ roomId }).select("host participants team");
-          account = await User.findById(userId).select("name");
+          meeting = await prisma.meeting.findUnique({ where: { roomId }, include: { participants: true, team: { include: { members: true } } } });
+          account = await prisma.user.findUnique({ where: { id: userId }, select: { name: true } });
           isAuthorized = Boolean(meeting && account && await canAccessMeeting(meeting, userId));
         } catch (error) {
           console.error("Could not verify meeting access:", error.message);
@@ -111,7 +110,7 @@ const initMeetingSockets = (io) => {
       }
     });
 
-    // Guest requests to join (no auth) — placed in lobby for host approval
+    // Guest requests to join (no auth) â€” placed in lobby for host approval
     socket.on("request-join", (payload = {}) => {
       const { roomId, name } = payload || {};
       const guestName = typeof name === "string" ? name.trim().slice(0, 80) : "";
@@ -126,7 +125,7 @@ const initMeetingSockets = (io) => {
       socket.emit("request-sent", { roomId });
     });
 
-    // Host accepts a guest — move from pending to active
+    // Host accepts a guest â€” move from pending to active
     socket.on("accept-guest", async (payload = {}) => {
       const { roomId, guestSocketId } = payload || {};
       if (typeof roomId !== "string" || !roomId || typeof guestSocketId !== "string" || !guestSocketId) return;
@@ -161,8 +160,8 @@ const initMeetingSockets = (io) => {
         const participantList = activeRooms[roomId].map((u) => ({ userId: u.userId, name: u.name }));
         io.to(roomId).emit("participants-updated", participantList);
 
-        // Do NOT emit user-joined here — the guest's MeetingRoomPage socket will
-        // join-room shortly and trigger existing-participants → initiateCall on their side.
+        // Do NOT emit user-joined here â€” the guest's MeetingRoomPage socket will
+        // join-room shortly and trigger existing-participants â†’ initiateCall on their side.
         // Emitting user-joined now would target the old JoinMeetingPage socket.
       }
     });
@@ -379,3 +378,5 @@ function findRoomBySocket(rooms, socketId) {
 }
 
 module.exports = { initMeetingSockets };
+
+

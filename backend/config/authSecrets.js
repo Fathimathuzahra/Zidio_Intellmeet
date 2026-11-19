@@ -9,15 +9,15 @@ function isValidSecret(secret) {
 }
 
 function configureAuthSecrets(env = process.env) {
-  const isLocalDemo = env.NODE_ENV !== 'production' && env.USE_IN_MEMORY_DB === 'true';
+  const isLocalDevelopment = env.NODE_ENV !== 'production';
 
-  if (isLocalDemo) {
+  if (isLocalDevelopment) {
     for (const name of SECRET_NAMES) {
       if (!isValidSecret(env[name])) {
         env[name] = crypto.randomBytes(32).toString('hex');
       }
     }
-    console.warn('Using process-only JWT secrets for local demo mode; sessions expire when the backend restarts.');
+    console.warn('Generated process-only JWT secrets for local development; sessions expire when the backend restarts.');
   }
 
   const invalidSecrets = SECRET_NAMES.filter((name) => !isValidSecret(env[name]));
